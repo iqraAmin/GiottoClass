@@ -1,26 +1,18 @@
 #' @include package_imports.R
 NULL
 
+# OLDCLASS ####
+setOldClass("giottoInstructions")
+
 # MISC ####
 ## * Define class unions ####
 
-#' @title NULL or char class union
-#' @description class to allow either NULL or character
-#' @keywords internal
-#' @noRd
 setClassUnion("nullOrChar", c("NULL", "character"))
-
-#' @title NULL or list class union
-#' @description class to allow either NULL or list
-#' @keywords internal
-#' @noRd
 setClassUnion("nullOrList", c("NULL", "list"))
-
-#' @title NULL or data.table class union
-#' @description class to allow either NULL or data.table
-#' @keywords internal
-#' @noRd
+setClassUnion("nullOrInstructions", c("nullOrList", "giottoInstructions"))
 setClassUnion("nullOrDatatable", c("NULL", "data.table"))
+setClassUnion("nullOrLogical", c("NULL", "logical"))
+# see zzz.R for allMatrix
 
 #' @title gIndex
 #' @description
@@ -29,9 +21,6 @@ setClassUnion("nullOrDatatable", c("NULL", "data.table"))
 #' @keywords internal
 #' @noRd
 setClassUnion("gIndex", c("numeric", "logical", "character"))
-
-
-
 
 # VIRTUAL CLASSES ####
 
@@ -309,6 +298,7 @@ terraVectData <- setClass(
 
 # UTILITY ####
 
+# ** affine2d ####
 setClass(
     Class = "affine2d",
     slots = list(
@@ -331,7 +321,47 @@ setClass(
     )
 )
 
+# ** processParam ####
 
+#' @title Parameter Classes for Data Processing Operations
+#' @name processParam-class
+#' @aliases processParam
+#' @description
+#' Utility class that defines a data processing procedure and any params used
+#' in performing it. Packages defining processing methods will create their own
+#' child classes. These parameter objects are intended to be passed alongside
+#' the data to process to [processData()].
+#' @slot param list. Named parameters to use with the intended processing
+#' operation. These can be accessed and updated using the `$` operator.
+#' @exportClass processParam
+setClass("processParam", contains = "VIRTUAL", slots = list(param = "list"))
+
+
+
+# ** svkey ####
+
+#' @name svkey-class
+#' @title Spatial Value Key
+#' @description
+#' A metaprogramming object that references a set of information to get
+#' from a `giotto` object when used as `svkey@get(gobject)`.
+#' Referenced data will be retrieved as a `data.table` via [spatValues()]
+#' @keywords internal
+setClass("svkey",
+    slots = list(
+        feats = "character",
+        spat_unit = "nullOrChar",
+        feat_type = "nullOrChar",
+        expression_values = "nullOrChar",
+        spat_loc_name = "nullOrChar",
+        spat_enr_name = "nullOrChar",
+        poly_info = "nullOrChar",
+        dim_reduction_to_use = "nullOrChar",
+        dim_reduction_name = "nullOrChar",
+        verbose = "nullOrLogical",
+        get = "function"
+    )
+)
 
 # SUBCLASSES ####
 
@@ -343,8 +373,6 @@ setClass(
 setClass("spatFeatData",
     contains = c("spatData", "featData", "VIRTUAL")
 )
-
-
 
 
 
@@ -409,6 +437,14 @@ updateGiottoObject <- function(gobject) {
         gobject@h5_file <- NULL
     }
 
+    # ensure instructions are of correct type
+    inst <- instructions(gobject)
+    if (!inherits(inst, c("giottoInstructions", "NULL")) &&
+        inherits(inst, "list")) {
+        class(inst) <- c("giottoInstructions", "list")
+        instructions(gobject, initialize = FALSE) <- inst
+    }
+
     # [Switch to GiottoClass versioning] --------------------------------------#
     # GiottoClass 0.1.2 adds max_window and colors slots to giottoLargeImage
     # this update function has been moved to .update_image_slot() below
@@ -460,13 +496,13 @@ updateGiottoObject <- function(gobject) {
     if (!methods::.hasSlot(x, "largeImages")) {
         return(x)
     }
-    
+
     # transfer largeImages slot contents to images slot
     lgimg_list <- attr(x, "largeImages")
 
     # remove slot
     attr(x, "largeImages") <- NULL
-    
+
     # if @largeImages was empty, expect `\001NULL\001` of class `name`
     # the object can be returned early now that @largeImages is stripped
     if (inherits(lgimg_list, "name")) {
@@ -492,7 +528,7 @@ updateGiottoObject <- function(gobject) {
     }
 
     x@images <- c(x@images, lgimg_list)
-        
+
     return(x)
 }
 
@@ -505,7 +541,7 @@ updateGiottoObject <- function(gobject) {
 # ! Any slot modifications should also be reflected in packedGiotto class !
 
 #' @title S4 giotto Class
-#' @description \pkg{Giotto}'s core object that encapsulates all the components
+#' @description Giotto's core object that encapsulates all the components
 #' of a spatial-omic project and facilitates analyses.
 #' @concept giotto object
 #' @slot expression expression information
@@ -562,22 +598,22 @@ giotto <- setClass(
     "giotto",
     slots = c(
         expression = "nullOrList",
-        expression_feat = "ANY",
-        spatial_locs = "ANY",
-        spatial_info = "ANY",
-        cell_metadata = "ANY",
-        feat_metadata = "ANY",
-        feat_info = "ANY",
-        cell_ID = "ANY",
-        feat_ID = "ANY",
-        spatial_network = "ANY",
-        spatial_grid = "ANY",
-        spatial_enrichment = "ANY",
-        dimension_reduction = "ANY",
-        nn_network = "ANY",
-        images = "ANY",
+        expression_feat = "nullOrChar",
+        spatial_locs = "nullOrList",
+        spatial_info = "nullOrList",
+        cell_metadata = "nullOrList",
+        feat_metadata = "nullOrList",
+        feat_info = "nullOrList",
+        cell_ID = "nullOrList",
+        feat_ID = "nullOrList",
+        spatial_network = "nullOrList",
+        spatial_grid = "nullOrList",
+        spatial_enrichment = "nullOrList",
+        dimension_reduction = "nullOrList",
+        nn_network = "nullOrList",
+        images = "nullOrList",
         parameters = "ANY",
-        instructions = "ANY",
+        instructions = "nullOrInstructions",
         offset_file = "ANY",
         versions = "list",
         join_info = "ANY",
@@ -1626,6 +1662,7 @@ giottoImage <- setClass(
 #' @exportClass giottoLargeImage
 giottoLargeImage <- setClass(
     Class = "giottoLargeImage",
+    contains = "giottoSubobject",
     slots = c(
         name = "ANY",
         raster_object = "ANY",
@@ -1661,13 +1698,16 @@ giottoLargeImage <- setClass(
 #' @title S4 giottoAffineImage Class
 #' @description
 #' Class extending `giottoLargeImage`. When `shear()` or `spin()` operations
-#' are performed on  
-#' 
-#' 
+#' are performed on a `giottoLargeImage`, this class is instantiated. It
+#' provides a way of storing the affine transformation and also lazily
+#' performing it when required for a plotting preview. It is possible to force
+#' the deferred affine transform using `doDeferred()` and return a processed
+#' `giottoLargeImage`.
 #' @slot affine contains `affine2d` object allowing lazily performed spatial
 #' transforms
-#' @slot funs list of functions associated with the object. Primarily to 
-#' perform the delayed/lazy operations
+#' @slot funs list of functions associated with the object. Primarily to
+#' perform the delayed/lazy operation
+#' @returns `giottoAffineImage`
 setClass(
     "giottoAffineImage",
     contains = c("giottoLargeImage"),
@@ -1727,3 +1767,18 @@ setClass(
 #     weight = 'numeric'
 #   )
 # )
+
+
+
+
+
+
+# giottoSpatial ####
+
+setClassUnion(
+    name = "giottoSpatial", c("giottoPolygon", "giottoPoints", "spatLocsObj")
+)
+
+setClassUnion(
+    name = "spatialClasses", c("giottoSpatial", "SpatVector")
+)

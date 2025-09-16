@@ -7,10 +7,11 @@ NULL
 #' Create a text representation of an object
 #' @param x object
 #' @param ... additional params to pass (none implemented)
+#' @returns character
 #' @examples
 #' img <- GiottoData::loadSubObjectMini("giottoLargeImage")
 #' as.character(img)
-#' 
+#'
 NULL
 
 #' @name show
@@ -40,8 +41,9 @@ setMethod(
 
         cat("An object of class", class(object), "\n")
 
-
         # active spat_unit and feat_type
+        nspat <- NULL
+        nfeat <- NULL
         active_su <- try(instructions(object, "active_spat_unit"),
             silent = TRUE
         )
@@ -50,9 +52,19 @@ setMethod(
         )
         if (!inherits(active_su, "try-error")) {
             cat(">Active spat_unit: ", active_su, "\n")
+            nspat <- length(spatIDs(object, spat_unit = active_su))
         }
         if (!inherits(active_ft, "try-error")) {
             cat(">Active feat_type: ", active_ft, "\n")
+            nfeat <- length(featIDs(object, feat_type = active_ft))
+        }
+
+        if (!is.null(nspat) || !is.null(nfeat)) {
+            cat(sprintf(
+                "dimensions    : %d, %d (features, cells)\n",
+                nfeat %null% NA_integer_,
+                nspat %null% NA_integer_
+            ))
         }
 
 
@@ -205,7 +217,7 @@ setMethod(
             )] %none%
                 print_cap
             writeLines(gsub(
-                pattern = "in show(.*?))'", replacement = "",
+                pattern = "in show().*", replacement = "",
                 x = print_cap
             ))
             cat("\n First four colnames:")
@@ -216,7 +228,9 @@ setMethod(
                 ), "\n"
             )
         } else if (inherits(slot(object, "exprMat"), "denseMatrix")) {
-            .abbrev_mat(object, nrows = 10, ncols = 10, header = FALSE)
+            .abbrev_mat(object,
+                nrows = 10, ncols = 6, print_prov = FALSE, header = FALSE
+            )
         } else {
             # * other matrices *
             print(slot(object, "exprMat"))
@@ -241,6 +255,7 @@ setMethod("show", signature("cellMetaObj"), function(object) {
     cat("An object of class", class(object), "\n")
     .show_spat_and_feat(object)
     .show_prov(object)
+    .show_dim(object)
     cat("\n")
     if (!is.null(object[])) print(head(object[], 3L))
 })
@@ -358,17 +373,17 @@ setMethod("show", signature("spatLocsObj"), function(object) {
     .show_class_and_name(object)
     .show_spat(object)
     .show_prov(object)
-    cat("dimensions:", dim(object), '\npreview   :\n')
-    
+    cat("dimensions:", dim(object), "\npreview   :\n")
+
     if (!is.null(slot(object, "coordinates"))) {
         show(head(slot(object, "coordinates"), 3L))
     }
-    
+
     # print ranges if possible
     cat("\nranges:\n")
     col_names <- colnames(slot(object, "coordinates"))
     coord_cols <- col_names[col_names %in% c("sdimx", "sdimy", "sdimz")]
-    
+
     try(
         expr = print(vapply(
             slot(object, "coordinates")[, c(coord_cols), with = FALSE],
@@ -618,6 +633,7 @@ setMethod(
 
 ## giottoPoints ####
 #' @rdname show
+#' @returns giotto slot
 setMethod("show", signature = "giottoPoints", function(object) {
     cat("An object of class giottoPoints\n")
     .show_feat(object)
@@ -727,7 +743,11 @@ setMethod("as.character", signature("giottoImage"), function(x, ...) {
     sprintf("<%s> %s", class(x), objName(x))
 })
 
-
+#' @rdname as.character
+#' @export
+setMethod("as.character", signature("svkey"), function(x, ...) {
+    sprintf("<svkey> feats: '%s'", paste(x@feats, collapse = "', '"))
+})
 
 
 
@@ -763,6 +783,7 @@ setMethod(
                 "(x, y)\n"
             )
             cat("Layers                  :", img_dim[3], "\n")
+            cat("Name                    :", names(object), "\n")
             cat("Estimated max intensity :", object@max_intensity, "\n")
             cat("Estimated min intensity :", object@min_intensity, "\n")
             if (object@is_int == TRUE) {
@@ -777,6 +798,7 @@ setMethod(
 )
 
 
+# affine2d ####
 
 #' @rdname show
 setMethod("show", signature("affine2d"), function(object) {
@@ -792,7 +814,7 @@ setMethod("show", signature("affine2d"), function(object) {
         paste(x, collapse = ", ") %>%
             paste(" (x, y)")
     }
-    
+
     showlist <- list()
     showlist$anchor <- .anchor_print()
     for (tf in object@order) {
@@ -812,9 +834,30 @@ setMethod("as.character", signature("giottoLargeImage"), function(x, ...) {
     sprintf("<%s> %s", class(x), objName(x))
 })
 
+# processParam ####
+setMethod("show", signature("processParam"), function(object) {
+    cat(sprintf("<%s>\n", class(object)))
+    cat("params:\n")
+    print_list(object[])
+})
 
+# svkey ####
+setMethod("show", signature("svkey"), function(object) {
+    cat(sprintf("<%s>\n", class(object)))
+    plist <- list(
+        feats = sprintf("'%s'", paste(object@feats, collapse = "' '")))
+    plist$spat_unit <- object@spat_unit
+    plist$feat_type <- object@feat_type
+    plist$expression_values <- object@expression_values
+    plist$spat_loc_name <- object@spat_loc_name
+    plist$spat_enr_name <- object@spat_enr_name
+    plist$poly_info <- object@poly_info
+    plist$dim_reduction_to_use <- object@dim_reduction_to_use
+    plist$dim_reduction_name <- object@dim_reduction_name
+    plist$verbose <- object@verbose
 
-
+    print_list(plist)
+})
 
 
 # show helpers ####
@@ -850,6 +893,12 @@ setMethod("as.character", signature("giottoLargeImage"), function(x, ...) {
     if (!is.null(object@provenance)) {
         cat("provenance:", object@provenance, "\n")
     }
+}
+
+#' @noRd
+.show_dim <- function(object) {
+    d <- dim(object)
+    cat(sprintf("dimensions: %d %d \n", d[1], d[2]))
 }
 
 #' @noRd

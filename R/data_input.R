@@ -23,19 +23,26 @@
 #'
 #' readExprMatrix(paste0(temporal_dir, "/mymatrix.csv"))
 #' @export
-readExprMatrix <- function(path,
-    cores = determine_cores(),
-    transpose = FALSE,
-    feat_type = "rna",
-    expression_matrix_class = c("dgCMatrix", "DelayedArray")) {
+readExprMatrix <- function(
+        path,
+        cores = determine_cores(),
+        transpose = FALSE,
+        feat_type = "rna",
+        expression_matrix_class = c("dgCMatrix", "DelayedArray"),
+        ...) {
     # check if path is a character vector and exists
     if (!is.character(path)) stop("path needs to be character vector")
     if (!file.exists(path)) stop("the path: ", path, " does not exist")
-
     data.table::setDTthreads(threads = cores)
 
     # read and convert
-    DT <- suppressWarnings(data.table::fread(input = path, nThread = cores))
+    DT <- handle_warnings(
+        data.table::fread(
+            input = path,
+            nThread = cores,
+            colClasses = list(character = 1) # enforce first col character
+        )
+    )$result
     spM <- Matrix::Matrix(as.matrix(DT[, -1]),
         dimnames = list(DT[[1]], colnames(DT[, -1])),
         sparse = TRUE
@@ -156,10 +163,10 @@ readExprData <- function(data_list,
     if (list_depth > 3L) {
         stop("Depth of expression list is more than 3, only 3 levels are
             possible:
-       0)", ch$s, ".
-       1)", ch$s, ch$b, "spatial unit (e.g. cell)
-       2)", ch$s, ch$s, ch$b, "feature (e.g. RNA)
-       3)", ch$s, ch$s, ch$s, ch$b, "data type (e.g. raw)\n")
+        0)", ch$s, ".
+        1)", ch$s, ch$b, "spatial unit (e.g. cell)
+        2)", ch$s, ch$s, ch$b, "feature (e.g. RNA)
+        3)", ch$s, ch$s, ch$s, ch$b, "data type (e.g. raw)\n")
     }
 
 

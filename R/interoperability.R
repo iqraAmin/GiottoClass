@@ -10,6 +10,8 @@
 #'
 #' @param gef_file path to .gef file
 #' @param bin_size bin size to select from .gef file
+#' @param gene_column (optional) character. Which column contains gene names
+#' within the geneExp information.
 #' @param h5_file name to create and on-disk HDF5 file
 #' @param verbose be verbose
 #'
@@ -22,9 +24,9 @@
 #' @returns giotto object
 #' @export
 
-gefToGiotto <- function(
-    gef_file,
+gefToGiotto <- function(gef_file,
     bin_size = "bin100",
+    gene_column = NULL,
     verbose = FALSE,
     h5_file = NULL) {
     # data.table vars
@@ -47,12 +49,46 @@ gefToGiotto <- function(
         file = gef_file,
         name = paste0("geneExp/", bin_size)
     )
-    geneDT <- data.table::as.data.table(geneExpData[["gene"]])
 
     exprDT <- data.table::as.data.table(geneExpData[["expression"]])
     exprDT[, count := lapply(.SD, as.integer), .SDcols = "count"]
     data.table::setorder(exprDT, x, y) # sort by x, y coords (ascending)
     geneDT <- data.table::as.data.table(geneExpData[["gene"]])
+
+    # gene_column selection
+    name_to_replace <- gene_column %null% "gene"
+    if (name_to_replace %in% colnames(geneDT)) {
+        data.table::setnames(geneDT, old = name_to_replace, new = "geneName")
+    }
+
+    # process duplicated gene symbol
+    if (any(duplicated(geneDT$geneName))) {
+        duplicated_genes <- unique(geneDT$geneName[duplicated(geneDT$geneName)])
+        cat("Ops!!! Duplicated_genes,processing:sum(count),mean(offset)")
+        # merge
+        for (gene in duplicated_genes) {
+            # indices
+            idx <- which(geneDT$geneName == gene)
+
+            #
+            cat("Processing gene:", gene, "\n")
+            cat("Original count values for", gene, ":", geneDT$count[idx], "\n")
+
+            # update
+            geneDT$count[idx[1]] <- sum(geneDT$count[idx]) # 对重复的 count 求和
+            geneDT$offset[idx[1]] <- mean(geneDT$offset[idx]) # 对重复的 offset 求平均
+
+            #
+            cat("Updated count for", gene, ":", geneDT$count[idx[1]], "\n")
+            cat("Updated offset for", gene, ":", geneDT$offset[idx[1]], "\n")
+
+            #
+            geneDT <- geneDT[-idx[-1], ]
+
+            #
+            cat("Deleted duplicate entries for gene:", gene, "\n\n")
+        }
+    }
 
     if (isTRUE(verbose)) wrap_msg("finished reading in .gef", bin_size, "\n")
 
@@ -68,7 +104,7 @@ gefToGiotto <- function(
 
     # 3. create expression matrix
     if (isTRUE(verbose)) wrap_msg("3. create expression matrix... \n")
-    exprDT[, genes := as.character(rep(x = geneDT$gene, geneDT$count))]
+    exprDT[, genes := as.character(rep(x = geneDT$geneName, geneDT$count))]
     exprDT[, gene_idx := as.integer(factor(exprDT$genes,
         levels = unique(exprDT$genes)
     ))]
@@ -84,7 +120,7 @@ gefToGiotto <- function(
     )
 
     colnames(expMatrix) <- cell_locations$cell_ID
-    rownames(expMatrix) <- geneDT$gene
+    rownames(expMatrix) <- geneDT$geneName
     rm(exprDT)
     if (isTRUE(verbose)) wrap_msg("finished expression matrix")
 
@@ -109,7 +145,6 @@ gefToGiotto <- function(
 
 #' @title Check Scanpy Installation
 #' @name check_py_for_scanpy
-#' @import reticulate
 #' @returns character
 #' @description checks current python environment for scanpy 1.9.0
 #' @keywords internal
@@ -129,12 +164,12 @@ check_py_for_scanpy <- function() {
             environment with reticulate:
 
             reticulate::py_install(packages = 'scanpy==1.9.0',
-                                   pip = TRUE)
+                                    pip = TRUE)
             \n
             ", errWidth = TRUE))
     } else if (module_test == FALSE && genv_in_use) {
         cat("Python module scanpy is required for conversion.
-          Installing scanpy now in the Giotto Miniconda Environment.\n")
+        Installing scanpy now in the Giotto Miniconda Environment.\n")
 
         conda_path <- reticulate::miniconda_path()
         py_ver <- reticulate::py_config()$version_string
@@ -167,18 +202,23 @@ check_py_for_scanpy <- function() {
 #' @param n_key_added equivalent of "key_added" argument from scanpy.pp.
 #' neighbors(). If multiple spatial networks are in the anndata object, a list
 #' of key_added terms may be provided. If converting an anndata object from
-#' giottoToAnnData, a .txt file may be provided, which was generated in that
-#' function, i.e. \{spat_unit\}_\{feat_type\}_nn_network_keys_added.txt. Cannot
-#' be "spatial". This becomes the name of the nearest network in the gobject.
+#' giottoToAnnData, the keys are saved in `.uns['NN_keys']`
+#' and all keys are used in conversion unless specified in the function call.
+#' Cannot be "spatial". This becomes the name of the nearest network in the gobject.
 #' @param spatial_n_key_added equivalent of "key_added" argument from
 #' squidpy.gr.spatial_neighbors. If multiple spatial networks are in the
 #' anndata object, a list of key_added terms may be provided. If converting an
-#' anndata object from giottoToAnnData, a .txt file may be provided, which was
-#' generated in that function,
-#' i.e. \{spat_unit\}_\{feat_type\}_spatial_network_keys_added.txt
+#' anndata object from giottoToAnnData, the keys are saved in `.uns['SN_keys']`
+#' and all keys are used in conversion unless specified in the function call.
 #' Cannot be the same as n_key_added.
 #' @param delaunay_spat_net binary parameter for spatial network. If TRUE, the
 #' spatial network is a delaunay network.
+#' @param spat_enrich_key_added
+#' list of names of spatial enrichment annotations present in the anndata object.
+#' If converting an anndata object from giottoToAnnData and the original Giotto object had
+#' spatial enrichment annotations, the keys are saved in
+#' `.uns['SE_keys']`
+#' and all keys are used in conversion unless specified in the function call.
 #' @param spat_unit desired spatial unit to use for conversion, default NULL
 #' @param feat_type desired feature type to use for conversion, default NULL
 #' @param h5_file name to create and on-disk HDF5 file
@@ -193,16 +233,17 @@ check_py_for_scanpy <- function() {
 #' creation.
 #' @returns Giotto object
 #' @export
-anndataToGiotto <- function(
-        anndata_path = NULL,
-        n_key_added = NULL,
-        spatial_n_key_added = NULL,
-        delaunay_spat_net = TRUE,
-        spat_unit = NULL,
-        feat_type = NULL,
-        h5_file = NULL,
-        python_path = NULL,
-        env_name = "giotto_env") {
+
+anndataToGiotto <- function(anndata_path = NULL,
+    n_key_added = NULL,
+    spatial_n_key_added = NULL,
+    delaunay_spat_net = TRUE,
+    spat_enrich_key_added = NULL,
+    spat_unit = NULL,
+    feat_type = NULL,
+    h5_file = NULL,
+    python_path = NULL,
+    env_name = "giotto_env") {
     # Preliminary file checks and guard clauses
     if (is.null(anndata_path)) {
         stop("Please provide a path to an AnnData .h5ad file for conversion.\n")
@@ -222,11 +263,28 @@ anndataToGiotto <- function(
         }
     }
 
+    g_su_ft <- gsub("converted_gobject.h5ad", "", basename(anndata_path))
+
+    if (is.null(n_key_added)) {
+        n_key_added <- list.files(
+            file.path(dirname(anndata_path), "giotto_meta"),
+            pattern = paste0(g_su_ft, "nn_network"), full.names = TRUE
+        )
+        n_key_added <- n_key_added %none% NULL
+    }
+    if (is.null(spatial_n_key_added)) {
+        spatial_n_key_added <- list.files(
+            file.path(dirname(anndata_path), "giotto_meta"),
+            pattern = paste0(g_su_ft, "spatial_network"), full.names = TRUE
+        )
+        spatial_n_key_added <- spatial_n_key_added %none% NULL
+    }
+
     # Required step to properly initialize reticulate
     instrs <- createGiottoInstructions(python_path = python_path)
 
     package_check(
-        pkg_name = c("anndata", "scanpy"), 
+        pkg_name = c("anndata", "scanpy"),
         repository = c("pip:anndata", "pip:scanpy")
     )
 
@@ -287,95 +345,103 @@ anndataToGiotto <- function(
 
     ### Set up PCA
     p <- extract_pca(adata)
-    if (!is.null(p)) {
-        pca <- p$pca
-        evs <- p$eigenvalues
-        loads <- p$loadings
-        # Add PCA to giottoObject
-        dobj <- create_dim_obj(
-            name = "pca.ad",
-            spat_unit = spat_unit,
-            feat_type = feat_type,
-            provenance = NULL,
-            reduction = "cells",
-            reduction_method = "pca",
-            coordinates = pca,
-            misc = list(
-                eigenvalues = evs,
-                loadings = loads
-            ),
-            my_rownames = colnames(X)
-        )
+    if (!is.null(p) && length(p) > 0) {
+        for (pca_name in names(p)) {
+            pca <- p[[pca_name]]$pca
+            evs <- p[[pca_name]]$eigenvalues
+            loads <- p[[pca_name]]$loadings
+            # Add PCA to giottoObject
+            dobj <- create_dim_obj(
+                name = pca_name,
+                spat_unit = spat_unit,
+                feat_type = feat_type,
+                provenance = NULL,
+                reduction = "cells",
+                reduction_method = "pca",
+                coordinates = pca,
+                misc = list(
+                    eigenvalues = evs,
+                    loadings = loads
+                ),
+                my_rownames = colnames(X)
+            )
 
-        ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
-        gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
-        ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+            ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+            gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
+            ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+        }
     }
 
     ### Set up UMAP
     u <- extract_umap(adata)
-    if (!is.null(u)) {
-        # Add UMAP to giottoObject
-        dobj <- create_dim_obj(
-            name = "umap.ad",
-            spat_unit = spat_unit,
-            feat_type = feat_type,
-            provenance = NULL,
-            reduction = "cells",
-            reduction_method = "umap",
-            coordinates = u,
-            misc = NULL,
-            my_rownames = colnames(X)
-        )
+    if (!is.null(u) && length(u) > 0) {
+        for (umap_name in names(u)) {
+            umap_coords <- u[[umap_name]]
 
-        ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
-        gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
-        ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+            # Add UMAP to giottoObject
+            dobj <- create_dim_obj(
+                name = umap_name,
+                spat_unit = spat_unit,
+                feat_type = feat_type,
+                provenance = NULL,
+                reduction = "cells",
+                reduction_method = "umap",
+                coordinates = umap_coords,
+                misc = NULL,
+                my_rownames = colnames(X)
+            )
+
+            ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+            gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
+            ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+        }
     }
+
     ### Set up TSNE
     t <- extract_tsne(adata)
-    if (!is.null(t)) {
-        # Add TSNE to giottoObject
-        dobj <- create_dim_obj(
-            name = "tsne.ad",
-            spat_unit = spat_unit,
-            feat_type = feat_type,
-            provenance = NULL,
-            reduction = "cells",
-            reduction_method = "tsne",
-            coordinates = t,
-            misc = NULL,
-            my_rownames = colnames(X)
-        )
+    if (!is.null(t) && length(t) > 0) {
+        for (tsne_name in names(t)) {
+            tsne_coords <- t[[tsne_name]]
 
-        ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
-        gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
-        ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+            # Add TSNE to giottoObject
+            dobj <- create_dim_obj(
+                name = tsne_name,
+                spat_unit = spat_unit,
+                feat_type = feat_type,
+                provenance = NULL,
+                reduction = "cells",
+                reduction_method = "tsne",
+                coordinates = tsne_coords,
+                misc = NULL,
+                my_rownames = colnames(X)
+            )
+            ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+            gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
+            ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ###
+        }
     }
 
     ### NN Network
 
     # Need to create nnNetObj or igraph object to use with setter for NN
 
-    weights_ad <- NULL
+    weights_ad_all <- extract_NN_connectivities(adata, key_added = n_key_added)
     num_NN_nets <- length(n_key_added)
 
     if (is.null(n_key_added) &&
-        !is.null(extract_NN_connectivities(adata, key_added = n_key_added))) {
-        num_NN_nets <- 1
+        !is.null(weights_ad_all)) {
+        num_NN_nets <- length(weights_ad_all)
     }
 
-    for (i in num_NN_nets) {
+    for (i in seq_len(num_NN_nets)) {
         if (inherits(n_key_added, "list")) {
             n_key_added_it <- n_key_added[[i]]
         } else {
-            n_key_added_it <- n_key_added
+            net_name <- sub("_[^_]+$", "", names(weights_ad_all)[i])
+            n_key_added_it <- net_name
         }
 
-        weights_ad <- extract_NN_connectivities(adata,
-            key_added = n_key_added_it
-        )
-        # adw = methods::as(weights_ad, "TsparseMatrix")
+        weights_ad <- weights_ad_all[[i]]
         if (!is.null(weights_ad)) {
             distances_ad <- extract_NN_distances(adata,
                 key_added = n_key_added_it
@@ -413,7 +479,7 @@ anndataToGiotto <- function(
                 net_name <- paste0(n_key_added_it, ".", nn_info["method"])
             } else if (!("sNN" %in% n_key_added_it) &
                 !is.null(n_key_added_it)) {
-                net_name <- paste0(n_key_added_it, ".", nn_info["method"])
+                net_name <- sub("_connectivities", "", n_key_added_it)
             } else {
                 net_name <- paste0(net_type, ".", nn_info["method"])
             }
@@ -438,30 +504,25 @@ anndataToGiotto <- function(
     }
 
     ## Spatial Network
-    s_weights_ad <- NULL
+    s_weights_ad_all <- extract_SN_connectivities(adata, key_added = spatial_n_key_added)
     num_SN_nets <- length(spatial_n_key_added)
 
     # Check for the case where NULL is provided, since the
     # anndata object takes the default value for SN
 
-    if (is.null(spatial_n_key_added) &&
-        !is.null(extract_SN_connectivities(adata,
-            key_added = spatial_n_key_added
-        ))) {
-        num_SN_nets <- 1
+    if (is.null(spatial_n_key_added) && !is.null(s_weights_ad_all)) {
+        num_SN_nets <- length(s_weights_ad_all)
     }
 
     for (i in seq_len(num_SN_nets)) {
         if (inherits(spatial_n_key_added, "list")) {
             spatial_n_key_added_it <- spatial_n_key_added[[i]]
         } else {
-            spatial_n_key_added_it <- spatial_n_key_added
+            net_name <- sub("_[^_]+$", "", names(s_weights_ad_all)[i])
+            spatial_n_key_added_it <- net_name
         }
 
-        s_weights_ad <- extract_SN_connectivities(
-            adata,
-            key_added = spatial_n_key_added_it
-        )
+        s_weights_ad <- s_weights_ad_all[[i]]
         if (!is.null(s_weights_ad)) {
             s_distances_ad <- extract_SN_distances(
                 adata,
@@ -516,16 +577,16 @@ anndataToGiotto <- function(
 
             # TODO filter network?
             # TODO 3D handling?
-            if (delaunay_spat_net) {
+            if (delaunay_spat_net[i]) {
                 spatObj <- create_spat_net_obj(
-                    name = "Spat_Net_from_AnnData",
+                    name = "Delaunay_network",
                     method = "delaunay",
                     networkDT = network_DT,
                     cellShapeObj = cellShapeObj
                 )
             } else {
                 spatObj <- create_spat_net_obj(
-                    name = "Spat_Net_from_AnnData",
+                    name = net_name,
                     method = "non-delaunay",
                     networkDT = network_DT,
                     cellShapeObj = cellShapeObj
@@ -534,8 +595,7 @@ anndataToGiotto <- function(
 
             gobject <- set_spatialNetwork(
                 gobject = gobject,
-                spatial_network = spatObj,
-                name = "Spat_Net_from_AnnData"
+                spatial_network = spatObj
             )
         }
     }
@@ -552,15 +612,43 @@ anndataToGiotto <- function(
                 lay@Dimnames[[1]] <- fID
                 lay@Dimnames[[2]] <- cID
             }
-            layExprObj <- createExprObj(lay, name = l_n)
+            l_n_trim <- paste(strsplit(l_n, "_")[[1]][3], collapse = "_")
+            layExprObj <- createExprObj(lay, name = l_n_trim)
             gobject <- set_expression_values(
                 gobject = gobject,
                 spat_unit = spat_unit,
                 feat_type = feat_type,
-                name = l_n,
+                name = l_n_trim,
                 values = layExprObj
             )
         }
+    }
+
+    # Spatial Enrichment
+    spat_enrich_all <- extract_spat_enrich(adata, key_added = spat_enrich_key_added)
+    num_spat_enrich <- length(spat_enrich_all)
+
+    if (is.null(spat_enrich_key_added) && !is.null(spat_enrich_all)) {
+        num_spat_enrich <- length(spat_enrich_all)
+    }
+
+    for (i in seq_len(num_spat_enrich)) {
+        if (inherits(spat_enrich_key_added, "list")) {
+            spat_enrich_key_added_it <- spat_enrich_key_added[[i]]
+        } else {
+            spat_enrich_name <- names(spat_enrich_all)[i]
+            spat_enrich_key_added_it <- spat_enrich_name
+        }
+        se <- spat_enrich_all[[i]]
+
+        spatEnrObj <- createSpatEnrObj(
+            se,
+            name = spat_enrich_name
+        )
+        gobject <- setSpatialEnrichment(
+            gobject = gobject,
+            spatEnrObj
+        )
     }
 
     gobject <- update_giotto_params(
@@ -610,20 +698,22 @@ giottoToAnnData <- function(
         env_name = "giotto_env",
         save_directory = NULL) {
     # Check gobject
-    invalid_obj <- !("giotto" %in% class(gobject))
+    invalid_obj <- !inherits(gobject, "giotto")
     if (is.null(gobject) || invalid_obj) {
         stop(wrap_msg("Please provide a valid Giotto Object for conversion."))
     }
 
     package_check(
-        pkg_name = c("anndata", "scanpy"), 
+        pkg_name = c("anndata", "scanpy"),
         repository = c("pip:anndata", "pip:scanpy")
     )
 
     # Python module import
     g2ad_path <- system.file("python", "g2ad.py", package = "GiottoClass")
     reticulate::source_python(g2ad_path)
-    if (!is.null(save_directory)) dir_guard(save_directory)
+    if (!is.null(save_directory)) {
+        save_directory <- paste0(save_directory, "/")
+    }
 
     # Check directory, make it if it doesn't exist
     if (is.null(save_directory)) {
@@ -646,6 +736,10 @@ giottoToAnnData <- function(
                 .h5ad file."
         )
     }
+
+    # set up giotto meta folder
+    gmdir <- file.path(save_directory, "giotto_meta")
+    if (!dir.exists(gmdir)) dir.create(gmdir)
 
     # Expresion
     expr_dt <- list_expression(gobject)
@@ -769,7 +863,7 @@ giottoToAnnData <- function(
     # Feat Metadata
     for (su in spat_unit) {
         for (ft in names(gobject@expression[[su]])) {
-            cmeta <- get_cell_metadata(
+            cmeta <- getCellMetadata(
                 gobject = gobject,
                 spat_unit = su,
                 feat_type = ft,
@@ -777,7 +871,7 @@ giottoToAnnData <- function(
                 set_defaults = FALSE
             )
 
-            fm <- get_feature_metadata(
+            fm <- getFeatureMetadata(
                 gobject = gobject,
                 spat_unit = su,
                 feat_type = ft,
@@ -833,33 +927,40 @@ giottoToAnnData <- function(
 
     # pca on feats not supported by anndata because of dimensionality
     # agreement reqs
-    reduction_options <- names(gobject@dimension_reduction)
+    reduction_list <- list_giotto_data(gobject, "dimension_reduction")
     dim_red <- NULL
+    if (!is.null(reduction_list) && is.data.frame(reduction_list)) {
+        for (i in seq_len(nrow(reduction_list))) {
+            ro <- reduction_list[[i, 1]]
+            su <- reduction_list[[i, 2]]
+            ft <- reduction_list[[i, 3]]
+            method <- reduction_list[[i, 4]]
+            name <- reduction_list[[i, 5]]
 
-    for (ro in reduction_options) {
-        if (ro != "cells") {
-            warning("AnnData does not support storing PCA by features.
-                    Skipping PCA data conversion.")
-            break
-        }
-        for (su in spat_unit) {
-            for (ft in names(gobject@expression[[su]])) {
-                name <- "pca"
-                if (ft != "rna") name <- paste0(ft, ".pca")
-                dim_red <- try_get_dimReduction(
-                    gobject = gobject,
-                    spat_unit = su,
-                    feat_type = ft,
-                    reduction = ro,
-                    reduction_method = "pca",
-                    name = name,
-                    output = "dimObj",
-                    set_defaults = FALSE
-                )
-                if (is.null(dim_red)) {
-                    adata_pos <- adata_pos + 1
-                    next
-                }
+            if (ro != "cells") {
+                warning("AnnData does not support storing PCA by features.
+                        Skipping PCA data conversion.")
+                break
+            }
+
+            if (ft != "rna") name <- paste0(ft, ".pca")
+            dim_red <- try_get_dimReduction(
+                gobject = gobject,
+                spat_unit = su,
+                feat_type = ft,
+                reduction = ro,
+                reduction_method = method,
+                name = name,
+                output = "dimObj",
+                set_defaults = FALSE
+            )
+
+            if (is.null(dim_red)) {
+                adata_pos <- adata_pos + 1
+                next
+            }
+
+            if (method == "pca") {
                 pca_coord <- dim_red[]
                 pca_loadings <- data.table(dim_red@misc$loadings)
                 feats_used <- dimnames(dim_red@misc$loadings)[[1]]
@@ -870,88 +971,38 @@ giottoToAnnData <- function(
                     pca_coord = pca_coord,
                     loadings = pca_loadings,
                     eigenv = evs,
-                    feats_used = feats_used
+                    feats_used = feats_used,
+                    pca_name = name
                 )
+                wrap_msg(sprintf("\n%s converted.\n", name))
                 adata_pos <- adata_pos + 1
             }
-        }
-        adata_pos <- 1
-    }
 
-    # Reset indexing variable
-    adata_pos <- 1
-
-    ## UMAP
-    for (ro in reduction_options) {
-        for (su in spat_unit) {
-            for (ft in names(gobject@expression[[su]])) {
-                name <- "umap"
-                if (ft != "rna") name <- paste0(ft, ".umap")
-                dim_red <- try_get_dimReduction(
-                    gobject = gobject,
-                    spat_unit = su,
-                    feat_type = ft,
-                    reduction = ro,
-                    reduction_method = "umap",
-                    name = name,
-                    output = "dimObj",
-                    set_defaults = FALSE
-                )
-
-                if (is.null(dim_red)) {
-                    adata_pos <- adata_pos + 1
-                    next
-                }
+            if (method == "umap") {
                 umap_data <- dim_red[]
                 adata_list[[adata_pos]] <- set_adg_umap(
                     adata = adata_list[[adata_pos]],
-                    umap_data = umap_data
+                    umap_data = umap_data,
+                    umap_name = name
                 )
+                wrap_msg(sprintf("\n%s converted.\n", name))
                 adata_pos <- adata_pos + 1
             }
-        }
-        # Reset indexing variable
-        adata_pos <- 1
-    }
 
-    # Reset indexing variable
-    adata_pos <- 1
-
-    ## T-SNE
-    for (ro in reduction_options) {
-        for (su in spat_unit) {
-            for (ft in names(gobject@expression[[su]])) {
-                name <- "tsne"
-                if (ft != "rna") name <- paste0(ft, ".tsne")
-                dim_red <- try_get_dimReduction(
-                    gobject = gobject,
-                    spat_unit = su,
-                    feat_type = ft,
-                    reduction = ro,
-                    reduction_method = "tsne",
-                    name = name,
-                    output = "dimObj",
-                    set_defaults = FALSE
-                )
-
-                if (is.null(dim_red)) {
-                    adata_pos <- adata_pos + 1
-                    next
-                }
+            if (method == "tsne") {
                 tsne_data <- dim_red[]
                 adata_list[[adata_pos]] <- set_adg_tsne(
                     adata = adata_list[[adata_pos]],
-                    tsne_data = tsne_data
+                    tsne_data = tsne_data,
+                    tsne_name = name
                 )
+                wrap_msg(sprintf("\n%s converted.\n", name))
                 adata_pos <- adata_pos + 1
             }
+            adata_pos <- 1
         }
-        # Reset indexing variable
-        adata_pos <- 1
     }
 
-    # Reset indexing variable
-    adata_pos <- 1
 
     # Nearest Neighbor Network
 
@@ -1028,13 +1079,9 @@ giottoToAnnData <- function(
                     )
                 }
 
-                fname_nn <- paste0(su, "_", ft, "_nn_network_keys_added.txt")
+                # Save NN keys to .uns['NN_keys']
                 network_name <- network_name[!grepl("kNN.", network_name)]
-                append_n <- FALSE
-                if (length(network_name) != 0) {
-                    if (nn_net_tu == "kNN") append_n <- TRUE
-                    write(network_name, fname_nn, append = append_n)
-                }
+                save_NN_keys(adata = adata_list[[adata_pos]], network_name = network_name)
             }
             adata_pos <- adata_pos + 1
         }
@@ -1068,7 +1115,6 @@ giottoToAnnData <- function(
         )
     }
 
-
     for (su in spat_unit) {
         for (ft in names(gobject@expression[[su]])) {
             # Spatial networks do not have a feature type slot.
@@ -1094,8 +1140,8 @@ giottoToAnnData <- function(
                 for (p in pidx) {
                     if (gobject@parameters[[p]]["name of spatial network"] == sn_name) {
                         current_param <- gobject@parameters[[p]]
-                        kval <- current_param["k neighbours"]
-                        maxdist <- current_param["maximum distance threshold"]
+                        kval <- current_param["k neighbours"] # null in the case of Delaunay
+                        maxdist <- current_param["maximum distance threshold"] # "auto" for Delaunay, "400 (string)" for sNN
                         dimused <- current_param["dimensions used"]
                     }
                 }
@@ -1110,8 +1156,13 @@ giottoToAnnData <- function(
                 )
             }
 
-            fname_sn <- paste0(su, "_", ft, "_spatial_network_keys_added.txt")
-            if (length(network_name) != 0) write(network_name, fname_sn)
+            # Save SN keys to .uns['SN_keys']
+            if (length(network_name) != 0) {
+                save_SN_keys(
+                    adata = adata_list[[adata_pos]],
+                    network_name = network_name
+                )
+            }
         }
 
         adata_pos <- adata_pos + 1
@@ -1119,6 +1170,37 @@ giottoToAnnData <- function(
 
     # Reset indexing variable
     adata_pos <- 1
+
+    # Spatial Enrichment
+    spat_enrich_list <- list_giotto_data(
+        gobject = gobject,
+        slot = "spatial_enrichment"
+    )
+
+    if (!is.null(spat_enrich_list) && is.data.frame(spat_enrich_list)) {
+        for (i in seq_len(nrow(spat_enrich_list))) {
+            se_su <- spat_enrich_list[i]$spat_unit
+            se_ft <- spat_enrich_list[i]$feat_type
+            se_name <- spat_enrich_list[i]$name
+
+            se <- getSpatialEnrichment(
+                gobject = gobject,
+                spat_unit = se_su,
+                feat_type = se_ft,
+                name = se_name,
+                output = "data.table"
+            )
+            adata_list[[adata_pos]] <- set_adg_spat_enrich(
+                adata = adata_list[[adata_pos]],
+                enrichment = se,
+                name = se_name
+            )
+        }
+        save_SE_keys(
+            adata = adata_list[[adata_pos]],
+            enrichment_name = spat_enrich_list$name
+        )
+    }
 
     # Write AnnData object to .h5ad file
     # Verify it exists, and return upon success
@@ -1169,7 +1251,7 @@ giottoToAnnData <- function(
 #' @param gobject Giotto object
 #' @param obj_use Giotto object (deprecated, use gobject)
 #' @param spat_unit spatial unit (e.g. 'cell')
-#' @param ... additional params to pass to \code{\link{get_spatial_locations}}
+#' @param ... additional params to pass to \code{\link{getSpatialLocations}}
 #' @returns Seurat object
 #' @export
 giottoToSeurat <- function(
@@ -1192,7 +1274,7 @@ giottoToSeurat <- function(
 #' The default values are 'cell' and 'rna' respectively.
 #' @param gobject Giotto object
 #' @param spat_unit spatial unit (e.g. 'cell')
-#' @param ... additional params to pass to \code{\link{get_spatial_locations}}
+#' @param ... additional params to pass to \code{\link{getSpatialLocations}}
 #' @returns Seurat object
 #' @keywords seurat interoperability
 #' @export
@@ -1296,7 +1378,7 @@ giottoToSeuratV4 <- function(
         }
         # add cell metadata
         meta_cells <- data.table::setDF(
-            get_cell_metadata(
+            getCellMetadata(
                 gobject = gobject,
                 spat_unit = spat_unit,
                 feat_type = assay_use,
@@ -1314,7 +1396,7 @@ giottoToSeuratV4 <- function(
         )
         # add feature metadata
         meta_genes <- data.table::setDF(
-            get_feature_metadata(
+            getFeatureMetadata(
                 gobject = gobject,
                 spat_unit = spat_unit,
                 feat_type = assay_use,
@@ -1465,26 +1547,38 @@ giottoToSeuratV4 <- function(
 #' The default values are 'cell' and 'rna' respectively.
 #' @param gobject Giotto object
 #' @param spat_unit spatial unit (e.g. 'cell')
+#' @param tech technology the dataset is using (e.g. "Visium","Xenium", "Slide-seq")
 #' @param res_type type of 10x image output resolution
-#' @param ... additional params to pass to \code{\link{get_spatial_locations}}
+#' @param ... additional params to pass to \code{\link{getSpatialLocations}}
 #' @returns Seurat object
 #' @keywords seurat interoperability
 #' @export
-giottoToSeuratV5 <- function(
-        gobject,
-        spat_unit = NULL,
-        res_type = c("hires", "lowres", "fullres"),
-        ...) {
+giottoToSeuratV5 <- function(gobject,
+    spat_unit = NULL,
+    tech = c("Visium", "Xenium", "Slide-seq"),
+    res_type = c("hires", "lowres", "fullres"),
+    ...) {
     # data.table vars
     feat_type <- name <- dim_type <- nn_type <- NULL
-
-    res_type <- match.arg(res_type, choices = c("hires", "lowres", "fullres"))
-
+    res_type <- match.arg(res_type,
+        choices = c("hires", "lowres", "fullres"),
+        several.ok = FALSE
+    )
+    tech <- match.arg(tech,
+        choices = c("Visium", "Xenium", "Slide-seq")
+    )
     # set default spat_unit and feat_type to be extracted as a Seurat assay
     spat_unit <- set_default_spat_unit(
         gobject = gobject,
         spat_unit = spat_unit
     )
+    assay_names <- names(gobject@expression$cell)
+
+    # Identify assays with spaces and replace with underscores
+    new_assay_names <- gsub(" ", "_", assay_names)
+
+    # Apply the new names to the gobject expression slot
+    names(gobject@expression$cell) <- new_assay_names
 
     # verify if optional package is installed
     package_check(pkg_name = "Seurat", repository = "CRAN")
@@ -1577,8 +1671,9 @@ giottoToSeuratV5 <- function(
         }
 
         # add cell metadata
+        names(gobject@cell_metadata$cell) <- gsub(" ", "_", names(gobject@cell_metadata$cell))
         meta_cells <- data.table::setDF(
-            get_cell_metadata(
+            getCellMetadata(
                 gobject = gobject,
                 spat_unit = spat_unit,
                 feat_type = assay_use,
@@ -1587,21 +1682,22 @@ giottoToSeuratV5 <- function(
             )
         )
         rownames(meta_cells) <- meta_cells$cell_ID
-        meta_cells <- meta_cells[, -which(colnames(meta_cells) == "cell_ID")]
+        meta_cells <- meta_cells[, -which(colnames(meta_cells) == "cell_ID"), drop = FALSE]
         if (ncol(meta_cells) > 0) {
             colnames(meta_cells) <- paste0(
                 assay_use, "_",
                 colnames(meta_cells)
             )
+            sobj <- Seurat::AddMetaData(sobj,
+                metadata = meta_cells[Seurat::Cells(sobj), ],
+                col.name = names(meta_cells)
+            )
         }
-        sobj <- Seurat::AddMetaData(sobj,
-            metadata = meta_cells[Seurat::Cells(sobj), ],
-            col.name = names(meta_cells)
-        )
 
         # add feature metadata
+        names(gobject@feat_metadata$cell) <- gsub(" ", "_", names(gobject@feat_metadata$cell))
         meta_genes <- data.table::setDF(
-            get_feature_metadata(
+            getFeatureMetadata(
                 gobject = gobject,
                 spat_unit = spat_unit,
                 feat_type = assay_use,
@@ -1610,16 +1706,14 @@ giottoToSeuratV5 <- function(
             )
         )
         rownames(meta_genes) <- meta_genes$feat_ID
-        for (i in seq_along(sobj@assays)) {
-
-            # Check if assay_slot has @meta.data or @meta.features
-            if ("meta.data" %in% slotNames(sobj@assays[[i]])) {
-                sobj@assays[[i]]@meta.data <- meta_genes
-            } else if ("meta.features" %in% slotNames(sobj@assays[[i]])) {
-                sobj@assays[[i]]@meta.features <- meta_genes
-            } else {
-                warning(paste("No suitable metadata slot found for assay", i))
-            }
+        if ("meta.data" %in% slotNames(sobj@assays[[assay_use]])) {
+            sobj@assays[[assay_use]]@meta.data <- meta_genes
+            message(paste("Meta data updated for assay:", assay_use))
+        } else if ("meta.features" %in% slotNames(sobj@assays[[assay_use]])) {
+            sobj@assays[[assay_use]]@meta.features <- meta_genes
+            message(paste("Meta features updated for assay:", assay_use))
+        } else {
+            warning(paste("No suitable metadata slot found for assay", assay_use))
         }
 
         # dim reduction
@@ -1717,8 +1811,8 @@ giottoToSeuratV5 <- function(
 
     # flip y vals
 
-      loc_use <- flip(loc_use)[] %>%
-      data.table::setDF()
+    loc_use <- flip(loc_use)[] %>%
+        data.table::setDF()
 
     rownames(loc_use) <- loc_use$cell_ID
     sobj <- Seurat::AddMetaData(sobj, metadata = loc_use)
@@ -1767,27 +1861,27 @@ giottoToSeuratV5 <- function(
 
     gimgs <- getGiottoImage(gobject, name = ":all:")
     if (length(gimgs) > 0) {
-      for (i in seq_along(gimgs)) {
-        gimg <- gimgs[[i]]
-        key <- objName(gimg)
-        imagerow <- loc_use$sdimy
-        imagecol <- loc_use$sdimx
-        img_array <- as(gimg, "array")
-        img_array <- img_array / 255
-        coord <- data.frame(
-          imagerow = imagerow, imagecol = imagecol,
-                    row.names = loc_use$cell_ID
-                    )
-        scalef <- .estimate_scalefactors(
-          gimg,
-          res_type = res_type,
-          spatlocs = loc_use
-          )
-        # There does not seem to be a way to tell seurat which image type
-        # you are using. The lowres scalefactor seems to be the important
-        # one in mapping the image
+        for (i in seq_along(gimgs)) {
+            gimg <- gimgs[[i]]
+            key <- objName(gimg)
+            imagerow <- loc_use$sdimy
+            imagecol <- loc_use$sdimx
+            img_array <- as(gimg, "array")
+            img_array <- img_array / 255
+            coord <- data.frame(
+                imagerow = imagerow, imagecol = imagecol,
+                row.names = loc_use$cell_ID
+            )
+            scalef <- .estimate_scalefactors(
+                gimg,
+                res_type = res_type,
+                spatlocs = loc_use
+            )
+            # There does not seem to be a way to tell seurat which image type
+            # you are using. The lowres scalefactor seems to be the important
+            # one in mapping the image
             scalefactors <- Seurat::scalefactors(
-              spot = scalef$spot,
+                spot = scalef$spot,
                 fiducial = scalef$fiducial,
                 hires = scalef$hires,
                 lowres = scalef[res_type] # this looks like the main one
@@ -1796,17 +1890,36 @@ giottoToSeuratV5 <- function(
                 # since we allow use non-lowres images
             )
             # see https://github.com/satijalab/seurat/issues/3595
-            newV1 <- new(
-                Class = "VisiumV1",
-                image = img_array,
-                scale.factors = scalefactors,
-                coordinates = coord,
-                spot.radius =
-                  scalef$fiducial * scalef$lowres / max(dim(img_array)),
-                key = paste0(key, "_")
-            )
+            if (tech != 0) {
+                if (tech == "Xenium") {
+                    coord1 <- coord
+                    coord$cell_id <- rownames(coord)
+                    coord <- coord[, c("cell_id", "imagerow", "imagecol")]
+                    segmentations.data <- list(
+                        "centroids" = SeuratObject::CreateCentroids(coord1),
+                        "segmentation" = SeuratObject::CreateSegmentation(coord)
+                    )
+                    coords <- SeuratObject::CreateFOV(
+                        coords = segmentations.data,
+                        type = c("segmentation", "centroids"),
+                        assay = "rna"
+                    )
+                    fov <- "default_fov"
+                    sobj[[fov]] <- coords
+                } else {
+                    newV1 <- new(
+                        Class = "VisiumV1",
+                        image = img_array,
+                        scale.factors = scalefactors,
+                        coordinates = coord,
+                        spot.radius =
+                            scalef$fiducial * scalef$lowres / max(dim(img_array)),
+                        key = paste0(key, "_")
+                    )
 
-            sobj@images[[key]] <- newV1
+                    sobj@images[[key]] <- newV1
+                }
+            }
         }
     }
 
@@ -1820,68 +1933,65 @@ giottoToSeuratV5 <- function(
 #' @param spatlocs a data.frame of spatial locations coordinates
 #' @noRd
 
-.estimate_scalefactors <- function(
-    x,
+.estimate_scalefactors <- function(x,
     res_type = c("hires", "lowres", "fullres"),
-    spatlocs
-    ){
-  res_type <- match.arg(res_type,
-                        choices = c("hires", "lowres", "fullres"))
-        pxdims <- dim(x)[1:2]
-        edims <- range(ext(x))
-        scalef <- mean(pxdims / edims)
-# assume that lowres and hires follow a general ratio
-# may not be that important since the scalefactor should theoretically
-# only matter for the image res that we are using
-# this ratio is roughly 3.333334 based on Visium BreastCancerA1 dataset
-        res_ratio <- 3.333334
-        # fullres should have a scalef of roughly 1.
-        # No way to guess hires or lowres scalefs so use arbitrary values.
-        hres_scalef <- switch(res_type,
-                              "hires" = scalef,
-                               "lowres" = scalef * res_ratio,
-                               "fullres" = 0.08250825 # arbitrary
+    spatlocs) {
+    res_type <- match.arg(res_type,
+        choices = c("hires", "lowres", "fullres")
+    )
+    pxdims <- dim(x)[seq(2)]
+    edims <- range(ext(x))
+    scalef <- mean(pxdims / edims)
+    # assume that lowres and hires follow a general ratio
+    # may not be that important since the scalefactor should theoretically
+    # only matter for the image res that we are using
+    # this ratio is roughly 3.333334 based on Visium BreastCancerA1 dataset
+    res_ratio <- 3.333334
+    # fullres should have a scalef of roughly 1.
+    # No way to guess hires or lowres scalefs so use arbitrary values.
+    hres_scalef <- switch(res_type,
+        "hires" = scalef,
+        "lowres" = scalef * res_ratio,
+        "fullres" = 0.08250825 # arbitrary
+    )
+    lres_scalef <- switch(res_type,
+        "hires" = scalef / res_ratio,
+        "lowres" = scalef,
+        "fullres" = 0.02475247 # arbitrary
+    )
+    # spot diameter and fid diameter are variable based on how spatial info was
+    # mapped to the image. Estimate this by getting the center to center
+    # px distance vs fullsize px dims ratio.
+    # ! fullsize px dims is the same as edims !
+    coords <- data.table::as.data.table(spatlocs)
+    # create a delaunay
+    dnet <- createNetwork(
+        as.matrix(coords[, c("sdimx", "sdimy")]),
+        type = "delaunay",
+        method = "geometry",
+        include_distance = TRUE,
+        as.igraph = FALSE,
+        include_weight = TRUE,
+        verbose = FALSE
+    )
 
-                )
-        lres_scalef <- switch(res_type,
-                              "hires" = scalef / res_ratio,
-                               "lowres" = scalef,
-                               "fullres" = 0.02475247 # arbitrary
-                 )
-# spot diameter and fid diameter are variable based on how spatial info was
-# mapped to the image. Estimate this by getting the center to center
- # px distance vs fullsize px dims ratio.
- # ! fullsize px dims is the same as edims !
-            coords <- data.table::as.data.table(spatlocs)
-             # create a delaunay
-             dnet <- createNetwork(
-             as.matrix(coords[, c("sdimx", "sdimy")]),
-             type = "delaunay",
-             method = "geometry",
-             include_distance = TRUE,
-             as.igraph = FALSE,
-             include_weight = TRUE,
-             verbose = FALSE
-             )
-
- # expect center to center be most common edge distance
- # this gives CC dist as fullres px distance
-  distances <- sort(unique(dnet$distance))
-  cc_px <- distances[which.max(table(dnet$distance))]
- # assume constant ratios between diameters and cc_px
- fid_cc_ratio <- 1.045909
-fid_diam <- cc_px * fid_cc_ratio
-spot_cc_ratio <- 0.6474675
-spot_diam <- cc_px * spot_cc_ratio
-scalef_list <- list(
-  spot = spot_diam,
-  fiducial = fid_diam,
-  hires = hres_scalef,
-  lowres = lres_scalef
-  )
-return(scalef_list)
-
-  }
+    # expect center to center be most common edge distance
+    # this gives CC dist as fullres px distance
+    distances <- sort(unique(dnet$distance))
+    cc_px <- distances[which.max(table(dnet$distance))]
+    # assume constant ratios between diameters and cc_px
+    fid_cc_ratio <- 1.045909
+    fid_diam <- cc_px * fid_cc_ratio
+    spot_cc_ratio <- 0.6474675
+    spot_diam <- cc_px * spot_cc_ratio
+    scalef_list <- list(
+        spot = spot_diam,
+        fiducial = fid_diam,
+        hires = hres_scalef,
+        lowres = lres_scalef
+    )
+    return(scalef_list)
+}
 
 
 #' @title Deprecated
@@ -2139,19 +2249,14 @@ seuratToGiottoV4 <- function(
             }
 
             if (verbose) message("Copying nearest neighbour networks")
-            nnNetObj <- GiottoClass::createNearestNetObj(
+            nnNetObj <- createNearestNetObj(
                 name = names(sobject@graphs)[i],
                 network = sobjIgraph
             )
             return(nnNetObj)
         })
 
-        for (i in seq_along(nnNetObj_list)) {
-            gobject <- GiottoClass::set_NearestNetwork(
-                gobject = gobject,
-                nn_network = nnNetObj_list[[i]]
-            )
-        }
+        gobject <- setGiotto(gobject, nnNetObj_list)
     }
     gobject <- createGiottoObject(exp,
         spatial_locs = spat_loc,
@@ -2192,6 +2297,8 @@ seuratToGiottoV4 <- function(
 #' @param subcellular_assay Specify name of the subcellular assay in input
 #' @param sp_network sp_network
 #' @param nn_network nn_network
+#' @param polygon Logical. If \code{TRUE}, extract segmentation polygons and centroids
+#' from Seurat image boundaries and convert them to a Giotto polygon object.
 #' @param verbose logical. Default to TRUE
 #' object. Default is \code{"Vizgen"}.
 #' @returns A Giotto object converted from Seurat object with all computations
@@ -2205,10 +2312,11 @@ seuratToGiottoV5 <- function(
         subcellular_assay = "SCT",
         sp_network = NULL,
         nn_network = NULL,
+        polygon = TRUE,
         verbose = TRUE) {
     package_check("Seurat")
 
-   # NSE vars
+    # NSE vars
     sdimy <- NULL
 
     if (is.null(Seurat::GetAssayData(
@@ -2249,12 +2357,16 @@ seuratToGiottoV5 <- function(
         # Cell Metadata
         cell_metadata <- sobject@meta.data
         cell_metadata <- data.table::as.data.table(
-        cell_metadata, keep.rownames = TRUE)
+            cell_metadata,
+            keep.rownames = TRUE
+        )
 
         # Feat Metadata
         feat_metadata <- sobject[[]]
         feat_metadata <- data.table::as.data.table(
-        feat_metadata, keep.rownames = TRUE)
+            feat_metadata,
+            keep.rownames = TRUE
+        )
 
         # rownames of both kept as `rn`
         # Dimension Reduction
@@ -2310,11 +2422,13 @@ seuratToGiottoV5 <- function(
                 assay = spatial_assay
             ))) {
                 spat_coord <- Seurat::GetTissueCoordinates(
-                  sobject,
-                  scale = NULL,
-                  cols = c(
-                  "imagerow",
-                  "imagecol"))
+                    sobject,
+                    scale = NULL,
+                    cols = c(
+                        "imagerow",
+                        "imagecol"
+                    )
+                )
 
                 if (!("cell" %in% spat_coord)) {
                     spat_coord$cell_ID <- rownames(spat_coord)
@@ -2329,129 +2443,96 @@ seuratToGiottoV5 <- function(
                 # flip them for Giotto
                 spat_loc[, sdimy := -sdimy]
                 data.table::setcolorder(
-                  spat_loc,
-                  neworder = c("sdimx",
-                               "sdimy",
-                               "cell_ID"
-                               )
-                  )
-
+                    spat_loc,
+                    neworder = c(
+                        "sdimx",
+                        "sdimy",
+                        "cell_ID"
+                    )
+                )
             } else {
                 message("Images for RNA assay not found in the data.
                         Skipping image processing.")
                 spat_loc <- NULL
             }
         }
-        # Subcellular
-        name <- names(sobject@images)
-        # if (!is.null(subcellular_assay)){
-        if (length(sobject@assays[[subcellular_assay]]) == 1) {
-            spat_coord <- Seurat::GetTissueCoordinates(sobject)
-            colnames(spat_coord) <- c("sdimx", "sdimy")
-            spat_coord$cell_ID <- rownames(spat_coord)
-            exp <- exp[, c(intersect(spat_coord$cell_ID, colnames(exp)))]
-            spat_loc <- spat_coord
-        }
-        # }
-        if (!length(sobject@images) == 0) {
-            for (i in names(sobject@images)) {
-                if ("molecules" %in% names(sobject@images[[i]]) == TRUE) {
-                    if (!length(sobject@images[[i]][["molecules"]]) == 0) {
-                        assay <- names(sobject@assays)
-                        featnames <- rownames(sobject)
-                        mol_spatlocs <- data.table::data.table()
+        gobject <- createGiottoObject(exp,
+            spatial_locs = spat_loc,
+            dimension_reduction = dimReduc_list
+        )
+        if (exists("normexp") == TRUE) {
+            exprObj <- create_expr_obj(
+                name = "normalized",
+                exprMat = normexp,
+                spat_unit = "cell",
+                feat_type = "rna",
+                provenance = "cell"
+            )
+            gobject <- set_expression_values(
+                gobject = gobject,
+                values = exprObj, set_defaults = FALSE
+            )
+            # Subcellular
+            name <- names(sobject@images)
+            # if (!is.null(subcellular_assay)){
+            if (length(sobject@assays[[subcellular_assay]]) == 1) {
+                spat_coord <- Seurat::GetTissueCoordinates(sobject)
+                if ("cell" %in% colnames(spat_coord)) {
+                    spat_coord$cell_ID <- spat_coord$cell
+                } else {
+                    spat_coord$cell_ID <- rownames(spat_coord)
+                }
+                colnames(spat_coord)[1:2] <- c("sdimx", "sdimy")
+                exp <- exp[, c(intersect(spat_coord$cell_ID, colnames(exp)))]
+                spat_loc <- spat_coord
+            }
+            # }
+            if (!length(sobject@images) == 0) {
+                for (i in names(sobject@images)) {
+                    if ("molecules" %in% names(sobject@images[[i]]) == TRUE) {
+                        if (!length(sobject@images[[i]][["molecules"]]) == 0) {
+                            assay <- names(sobject@assays)
+                            featnames <- rownames(sobject)
+                            mol_spatlocs <- data.table::data.table()
 
-                        for (x in featnames) {
-                            df <- (Seurat::FetchData(
-                                sobject[[i]][["molecules"]],
-                                vars = x
-                            ))
-                            mol_spatlocs <- rbind(mol_spatlocs, df)
-                        }
-                        gpoints <- createGiottoPoints(mol_spatlocs,
-                            feat_type = "rna"
-                        )
-                        if ("centroids" %in% names(sobject@images[[i]])) {
-                            centroids_coords <-
-                                sobject@images[[i]]$centroids@coords
-                            centroids_coords <- vect(centroids_coords)
-                            gpolygon <- create_giotto_polygon_object(
-                                name = "cell", spatVector = centroids_coords
+                            for (x in featnames) {
+                                df <- (Seurat::FetchData(
+                                    sobject[[i]][["molecules"]],
+                                    vars = x
+                                ))
+                                mol_spatlocs <- rbind(mol_spatlocs, df)
+                            }
+                            gpoints <- createGiottoPoints(mol_spatlocs,
+                                feat_type = "rna"
                             )
-                        }
-                        if ("segmentation" %in% names(sobject@images[[i]])) {
-                            polygon_list <- list()
-
-                            for (j in seq(sobject@images[[
-                                i
-                            ]]@boundaries$segmentation@polygons)) {
-                                polygon_info <- sobject@images[[
-                                    i
-                                ]]@boundaries$segmentation@polygons[[j]]
-
-                                # Get coordinates from segmentation
-                                seg_coords <- polygon_info@Polygons[[1]]@coords
-
-                                # Fetch cell_Id from polygon information
-                                cell_ID <- polygon_info@ID
-
-                                # Convert it to SpatVector
-                                seg_coords <- vect(seg_coords)
-
-                                # Create giotto_polygon_object
-                                gpolygon <- create_giotto_polygon_object(
-                                    name = "cell",
-                                    spatVector = centroids_coords,
-                                    spatVectorCentroids = seg_coords
-                                )
-
-                                # Add the cell_ID to the list of polygon names
-                                polygon_list[[cell_ID]] <- gpolygon
+                            if (polygon %in% names(sobject@images)) {
+                                message("Creating Giotto polygon object from Seurat segmentation + centroids...")
+                                polygon_info <- .createGiottoPolygonFromSeurat(sobject, image_name = "Xenium")
                             }
                         }
                     }
                 }
             }
         }
-    }
 
-    # Find SueratImages, extract them, and pass to create image
-    image_list <- list()
-    for (i in names(sobject@images)) {
-      simg <- sobject[[i]]
-        # check if image slot has image in it
-        if ("image" %in% slotNames(simg)) {
-          img_array <- slot(simg, "image")
-          if (!is.null(img_array)) {
-            scalef <- Seurat::ScaleFactors(simg)
-                gImg <- createGiottoLargeImage(
-                    raster_object = terra::rast(img_array) * 255,
-                    name = i,
-                    scale_factor = 1 / scalef$lowres
-                )
-                image_list[[i]] <- gImg
+        # Find SueratImages, extract them, and pass to create image
+        image_list <- list()
+        for (i in names(sobject@images)) {
+            simg <- sobject[[i]]
+            # check if image slot has image in it
+            if ("image" %in% slotNames(simg)) {
+                img_array <- slot(simg, "image")
+                if (!is.null(img_array)) {
+                    scalef <- Seurat::ScaleFactors(simg)
+                    gImg <- createGiottoLargeImage(
+                        raster_object = terra::rast(img_array) * 255,
+                        name = i,
+                        scale_factor = 1 / scalef$lowres
+                    )
+                    image_list[[i]] <- gImg
+                }
             }
         }
-    }
-
-
-    gobject <- createGiottoObject(exp,
-        spatial_locs = spat_loc,
-        dimension_reduction = dimReduc_list
-    )
-    if (exists("normexp") == TRUE) {
-        exprObj <- create_expr_obj(
-            name = "normalized",
-            exprMat = normexp,
-            spat_unit = "cell",
-            feat_type = "rna",
-            provenance = "cell"
-        )
-        gobject <- set_expression_values(
-            gobject = gobject,
-            values = exprObj, set_defaults = FALSE
-        )
-        # gobject@expression$cell$rna$normalized = normexp
     }
 
     # Networks
@@ -2538,26 +2619,23 @@ seuratToGiottoV5 <- function(
             }
 
             if (verbose) message("Copying nearest neighbour networks")
-            nnNetObj <- GiottoClass::createNearestNetObj(
+            nnNetObj <- createNearestNetObj(
                 name = names(sobject@graphs)[i],
                 network = sobjIgraph
             )
             return(nnNetObj)
         })
 
-        for (i in seq_along(nnNetObj_list)) {
-            gobject <- GiottoClass::set_NearestNetwork(
-                gobject = gobject,
-                nn_network = nnNetObj_list[[i]]
-            )
-        }
+        gobject <- setGiotto(gobject, nnNetObj_list)
     }
     gobject <- addCellMetadata(
-      gobject = gobject, new_metadata = cell_metadata,
-      by_column = TRUE, column_cell_ID = "rn")
+        gobject = gobject, new_metadata = cell_metadata,
+        by_column = TRUE, column_cell_ID = "rn"
+    )
 
     gobject <- addFeatMetadata(
-      gobject = gobject, new_metadata = feat_metadata)
+        gobject = gobject, new_metadata = feat_metadata
+    )
 
     if (exists("gpoints")) {
         gobject <- addGiottoPoints(
@@ -2566,12 +2644,16 @@ seuratToGiottoV5 <- function(
         )
     }
 
-    if (exists("gpolygon")) {
-        gobject <- addGiottoPolygons(
-            gobject = gobject,
-            gpolygons = polygon_list
-        )
+    if (polygon) {
+        gpolygon <- try(.createGiottoPolygonFromSeurat(sobject), silent = TRUE)
+        if (!inherits(gpolygon, "try-error")) {
+            gobject <- gobject <- addGiottoPolygons(
+                gobject = gobject,
+                gpolygons = list(gpolygon)
+            )
+        }
     }
+
 
     if (exists("gImg")) {
         gobject <- addGiottoLargeImage(
@@ -2582,18 +2664,76 @@ seuratToGiottoV5 <- function(
     return(gobject)
 }
 
+#' Create GiottoPolygon from Seurat image boundaries
+#' Extracts segmentation and centroid data from a Seurat image (under `@boundaries`)
+#' and converts it to a `GiottoPolygon` object.
+#' @param sobject A Seurat object with boundary info in `sobject@images[[...]]@boundaries`.
+#' @param image_name Optional. Name of the image. If NULL, auto-detects one with both centroids and segmentation.
+#' @return A `GiottoPolygon` object with polygon and centroid information.
+#' @examples
+#' \dontrun{
+#' gpolygon <- .createGiottoPolygonFromSeurat(seurat_object)
+#' gobject <- addGiottoPolygons(gobject, gpolygons = list(gpolygon))
+#' }
+#' @noRd
 
+.createGiottoPolygonFromSeurat <- function(sobject, image_name = NULL) {
+    # Auto-detect an image with valid boundaries
+    if (is.null(image_name)) {
+        valid_images <- names(sobject@images)[
+            vapply(sobject@images, function(img) {
+                boundaries <- img@boundaries
+                !is.null(boundaries$segmentation) && !is.null(boundaries$centroids)
+            }, logical(1))
+        ]
+        if (length(valid_images) == 0) {
+            stop("No image in sobject@images has both segmentation and centroids in @boundaries.")
+        }
+        image_name <- valid_images[1]
+    }
 
+    image <- sobject@images[[image_name]]
+    boundaries <- image@boundaries
 
+    #### Centroids ####
+    centroids_df <- as.data.frame(boundaries$centroids@coords)
+    centroids_df$cell_ID <- boundaries$centroids@cells
 
+    centroids_vect <- terra::vect(
+        centroids_df,
+        geom = c("x", "y"),
+        keepgeom = TRUE,
+        crs = ""
+    )
+
+    #### Segmentation polygons ####
+    sp_polygons <- boundaries$segmentation@polygons
+    ring_list <- lapply(sp_polygons, function(p) p@Polygons[[1]]@coords)
+    polygon_geom_list <- lapply(ring_list, function(coords) list(coords))
+    cell_ids <- names(sp_polygons)
+
+    polygon_vect <- terra::vect(
+        polygon_geom_list,
+        type = "polygons",
+        crs = ""
+    )
+    polygon_vect$cell_ID <- cell_ids
+
+    create_giotto_polygon_object(
+        name = "cell",
+        spatVector = polygon_vect,
+        spatVectorCentroids = centroids_vect
+    )
+}
 
 ## SpatialExperiment object ####
 
 #' Utility function to convert a Giotto object to a SpatialExperiment object.
 #'
-#' @param giottoObj Input Giotto object to convert to a SpatialExperiment object
+#' @param gobject Input Giotto object to convert to a SpatialExperiment object
 #' @param verbose A boolean value specifying if progress messages should be
 #' displayed or not. Default \code{TRUE}.
+#' @param giottoObj deprecated
 #'
 #' @returns A SpatialExperiment object that contains data from the input Giotto
 #' object.
@@ -2603,7 +2743,15 @@ seuratToGiottoV5 <- function(
 #' giottoToSpatialExperiment(mini_gobject)
 #' }
 #' @export
-giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
+giottoToSpatialExperiment <- function(gobject,
+    verbose = TRUE,
+    giottoObj = deprecated()) {
+    # deprecation
+    gobject <- deprecate_param(giottoObj, gobject,
+        fun = "giottoToSpatialExperiment",
+        when = "0.4.6"
+    )
+
     spat_unit <- NULL
 
     # Load required packages
@@ -2618,7 +2766,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
     speList <- list()
 
     # Expression Matrices
-    giottoExpr <- list_expression(giottoObj)
+    giottoExpr <- list_expression(gobject)
 
     # Iterate over spatial units
     spatialUnits <- unique(giottoExpr$spat_unit) # a function to get spat units?
@@ -2635,7 +2783,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
                 )
             }
             exprMat <- getExpression(
-                gobject = giottoObj,
+                gobject = gobject,
                 spat_unit = spatialUnits[su],
                 feat_type = giottoExpr[1]$feat_type,
                 values = giottoExpr[1]$name,
@@ -2679,7 +2827,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
                     ),
                     withDimnames = FALSE
                 ) <- getExpression(
-                    gobject = giottoObj,
+                    gobject = gobject,
                     spat_unit = spatialUnits[su],
                     feat_type = giottoExpr[i]$feat_type,
                     values = giottoExpr[i]$name,
@@ -2689,7 +2837,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
         }
 
         # Cell Metadata to ColData
-        pData <- pDataDT(gobject = giottoObj, spat_unit = spatialUnits[su])
+        pData <- pDataDT(gobject = gobject, spat_unit = spatialUnits[su])
         if (nrow(pData) > 0) {
             if (verbose) {
                 message(
@@ -2708,7 +2856,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
         }
 
         # Feature Metadata to RowData
-        fData <- fDataDT(gobject = giottoObj, spat_unit = spatialUnits[su])
+        fData <- fDataDT(gobject = gobject, spat_unit = spatialUnits[su])
         if (nrow(fData) > 0) {
             if (verbose) {
                 message(
@@ -2725,7 +2873,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
 
         # Spatial Locations to Spatial Coordinates
         spatialLocs <- get_spatial_locations(
-            gobject = giottoObj,
+            gobject = gobject,
             spat_unit = spatialUnits[su],
             output = "data.table"
         )
@@ -2744,7 +2892,6 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
                 spatialLocs <- spatialLocs[, c("sdimx", "sdimy"), drop = FALSE]
             }
             SpatialExperiment::spatialCoords(spe) <- data.matrix(spatialLocs)
-
         } else {
             if (verbose) {
                 message("No spatial locations found in the input Giotto object")
@@ -2753,7 +2900,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
 
         # DimReductions
         giottoReductions <- list_dim_reductions(
-            gobject = giottoObj,
+            gobject = gobject,
             spat_unit = spatialUnits[su]
         )
         if (!is.null(giottoReductions)) {
@@ -2768,7 +2915,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
                     spe,
                     giottoReductions[i]$name
                 ) <- get_dimReduction(
-                    gobject = giottoObj,
+                    gobject = gobject,
                     reduction = "cells",
                     spat_unit = spatialUnits[su],
                     feat_type = giottoReductions[i]$feat_type,
@@ -2787,7 +2934,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
 
         # NN Graph
         giottoNearestNetworks <- list_nearest_networks(
-            gobject = giottoObj,
+            gobject = gobject,
             spat_unit = spatialUnits[su]
         )
         if (!is.null(giottoNearestNetworks)) {
@@ -2799,7 +2946,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
             }
             for (i in seq(nrow(giottoNearestNetworks))) {
                 nn_network <- get_NearestNetwork(
-                    gobject = giottoObj,
+                    gobject = gobject,
                     spat_unit = spatialUnits[su],
                     nn_network_to_use = giottoNearestNetworks[i]$type,
                     network_name = giottoNearestNetworks[i]$name,
@@ -2827,7 +2974,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
 
         # Spatial Networks
         giottoSpatialNetworks <- list_spatial_networks(
-            gobject = giottoObj,
+            gobject = gobject,
             spat_unit = spatialUnits[su]
         )
         if (!is.null(giottoSpatialNetworks)) {
@@ -2839,7 +2986,7 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
             }
             for (i in seq(nrow(giottoSpatialNetworks))) {
                 sp_network <- get_spatialNetwork(
-                    gobject = giottoObj,
+                    gobject = gobject,
                     spat_unit = spatialUnits[su],
                     name = giottoSpatialNetworks[i]$name,
                     output = "networkDT"
@@ -2865,11 +3012,11 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
         }
 
         # SpatialImages
-        giottoImages <- list_images(gobject = giottoObj)
+        giottoImages <- list_images(gobject = gobject)
         if (!is.null(giottoImages)) {
             for (i in seq(nrow(giottoImages))) {
                 img <- get_giottoImage(
-                    gobject = giottoObj,
+                    gobject = gobject,
                     image_type = giottoImages[i]$img_type,
                     name = giottoImages[i]$name
                 )
@@ -2935,7 +3082,6 @@ giottoToSpatialExperiment <- function(giottoObj, verbose = TRUE) {
 #' networks. This can be a vector of multiple network names.
 #' @param verbose A boolean value specifying if progress messages should
 #' be displayed or not. Default \code{TRUE}.
-#' @import data.table
 #' @returns Giotto object
 #' @examples
 #' \dontrun{
@@ -3385,20 +3531,23 @@ giottoMasterToSuite <- function(
 #' @param n_key_added equivalent of "key_added" argument from scanpy.pp.neighbors().
 #' If multiple spatial networks are in the anndata object, a list of key_added
 #' terms may be provided.
-#' If converting an anndata object from giottoToAnnData, a .txt file may be
-#' provided, which was generated in that function,
-#'       i.e. \{spat_unit\}_\{feat_type\}_nn_network_keys_added.txt
+#' If converting an anndata object from giottoToAnnData, the keys are saved in `.uns['NN_keys']`
+#' and all keys are used in conversion unless specified in the function call.
 #' Cannot be "spatial". This becomes the name of the nearest network in the gobject.
-#' @param spatial_n_key_added 
+#' @param spatial_n_key_added
 #' equivalent of "key_added" argument from squidpy.gr.spatial_neighbors.
 #' If multiple spatial networks are in the anndata object, a list of key_added
 #' terms may be provided.
-#' If converting an anndata object from giottoToAnnData, a .txt file may be
-#' provided, which was generated in that function,
-#'     i.e. \{spat_unit\}_\{feat_type\}_spatial_network_keys_added.txt
+#' If converting a SpatialData object from giottoToSpatialData, the keys are saved in `.uns['SN_keys']`
+#' and all keys are used in conversion unless specified in the function call.
 #' Cannot be the same as n_key_added.
-#' @param delaunay_spat_net binary parameter for spatial network. If TRUE, 
+#' @param delaunay_spat_net binary parameter for spatial network. If TRUE,
 #' the spatial network is a delaunay network.
+#' @param spat_enrich_key_added
+#' list of names of spatial enrichment annotations added to the SpatialData object.
+#' If converting an anndata object from giottoToAnnData and the original Giotto object had
+#' spatial enrichment annotations, the keys are saved in `.uns['SE_keys']`
+#' and all keys are used in conversion unless specified in the function call.
 #' @param spat_unit desired spatial unit for conversion, default NULL
 #' @param feat_type desired feature type for conversion, default NULL
 #' @param python_path path to python executable within a conda/miniconda environment
@@ -3411,16 +3560,15 @@ giottoMasterToSuite <- function(
 #'    See \code{\link{changeGiottoInstructions}} to modify instructions after creation.
 #' @export
 
-spatialdataToGiotto <- function(
-        spatialdata_path = NULL,
-        n_key_added = NULL,
-        spatial_n_key_added = NULL,
-        delaunay_spat_net = TRUE,
-        spat_unit = NULL,
-        feat_type = NULL,
-        python_path = NULL,
-        env_name = NULL) {
-
+spatialdataToGiotto <- function(spatialdata_path = NULL,
+    n_key_added = NULL,
+    spatial_n_key_added = NULL,
+    delaunay_spat_net = TRUE,
+    spat_enrich_key_added = NULL,
+    spat_unit = NULL,
+    feat_type = NULL,
+    python_path = NULL,
+    env_name = NULL) {
     # File check
     if (is.null(spatialdata_path)) {
         stop("Please provide a path to SpatialData object for conversion.\n")
@@ -3458,264 +3606,537 @@ spatialdataToGiotto <- function(
     reticulate::source_python(sd2g_path)
     sdata <- read_spatialdata_from_path(spatialdata_path)
 
-    # Extract expression matrix
-    expr_df <- extract_expression(sdata)
-    cID <- extract_cell_IDs(sdata)
-    fID <- extract_feat_IDs(sdata)
-
-    # Extract spatial locations
-    spatial_df <- extract_spatial(sdata)
-    sp <- parse_obsm_for_spat_locs(sdata)
-
-    # Set up metadata
-    cm <- extract_cell_metadata(sdata)
-    cm <- as.data.table(cm)
-    if ("leiden" %in% names(cm)) {
-        cm$leiden <- as.numeric(cm$leiden)
+    if (is.null(n_key_added)) {
+        n_key_added <- list.files(
+            file.path(spatialdata_path, "giotto_meta"),
+            pattern = "nn_network", full.names = TRUE
+        )
+        n_key_added <- n_key_added %none% NULL
     }
-
-    fm <- extract_feat_metadata(sdata)
-    fm <- as.data.table(fm)
+    if (is.null(spatial_n_key_added)) {
+        spatial_n_key_added <- list.files(
+            file.path(spatialdata_path, "giotto_meta"),
+            pattern = "spatial_network", full.names = TRUE
+        )
+        spatial_n_key_added <- spatial_n_key_added %none% NULL
+    }
 
     # Create baseline Giotto object
     gobject <- createGiottoObject(
-        expression = expr_df,
-        spatial_locs = spatial_df,
         instructions = instrs
     )
 
-    # Attach hires image
-    raster <- terra::rast(extract_image(sdata))
-    giotto_image <- createGiottoLargeImage(raster)
-    gobject <- addGiottoLargeImage(gobject = gobject, largeImages = c(giotto_image))
+    # Extract expression matrices
+    expr_df_dict <- extract_expression(sdata)
 
-    # Attach metadata
-    cm <- readCellMetadata(cm)
-    gobject <- setCellMetadata(gobject, x = cm)
-    fm <- readFeatMetadata(fm)
-    gobject <- setFeatureMetadata(gobject, x = fm)
+    su_list_initial <- list()
+    ft_list_initial <- list()
+    su_list <- list()
+    ft_list <- list()
 
-    spat_unit <- activeSpatUnit(gobject)
-    feat_type <- activeFeatType(gobject)
-
-    # Add PCA
-    p <- extract_pca(sdata)
-    if (!is.null(p)) {
-        pca <- p$pca
-        evs <- p$eigenvalues
-        loads <- p$loadings
-        # Add pca to giottoObject
-        dobj <- createDimObj(
-            coordinates = pca,
-            name = "pca",
-            spat_unit = spat_unit,
-            feat_type = feat_type,
-            method = "pca",
-            reduction = "cells",
-            provenance = NULL,
-            misc = list(
-                eigenvalues = evs,
-                loadings = loads
-            ),
-            my_rownames = colnames(expr_df)
-        )
-        gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
+    # Set expression data
+    if (!is.null(spat_unit)) {
+        su_list_initial <- spat_unit
+    }
+    if (!is.null(feat_type)) {
+        ft_list_initial <- feat_type
     }
 
-    # Add UMAP
-    u <- extract_umap(sdata)
-    if (!is.null(u)) {
-        # Add UMAP to giottoObject
-        dobj <- createDimObj(
-            coordinates = u,
-            name = "umap",
-            spat_unit = spat_unit,
-            feat_type = feat_type,
-            method = "umap",
-            reduction = "cells",
-            provenance = NULL,
-            misc = NULL,
-            my_rownames = colnames(expr_df)
-        )
-        gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
-    }
-
-    # Add tSNE
-    t <- extract_tsne(sdata)
-    if (!is.null(t)) {
-        # Add TSNE to giottoObject
-        dobj <- createDimObj(
-            coordinates = t,
-            name = "tsne",
-            spat_unit = spat_unit,
-            feat_type = feat_type,
-            method = "tsne",
-            reduction = "cells",
-            provenance = NULL,
-            misc = NULL,
-            my_rownames = colnames(expr_df)
-        )
-        gobject <- set_dimReduction(gobject = gobject, dimObject = dobj)
-    }
-
-    ## Nearest Network
-
-    weights_sd <- NULL
-    num_NN_nets <- length(n_key_added)
-
-    if (is.null(n_key_added) && !is.null(extract_NN_connectivities(sdata, key_added = n_key_added))) {
-        num_NN_nets <- 1
-    }
-
-    for (i in num_NN_nets) {
-        if (inherits(n_key_added, "list")) {
-            n_key_added_it <- n_key_added[[i]]
-        } else {
-            n_key_added_it <- n_key_added
-        }
-
-        weights_sd <- extract_NN_connectivities(sdata, key_added = n_key_added_it)
-        # adw = methods::as(weights_ad, "TsparseMatrix")
-        if (!is.null(weights_sd)) {
-            distances_sd <- extract_NN_distances(sdata, key_added = n_key_added_it)
-
-            nn_dt <- align_network_data(distances = weights_sd, weights = distances_sd)
-
-            # pre-allocate DT variables
-            from <- to <- weight <- distance <- from_cell_ID <- to_cell_ID <- uniq_ID <- NULL
-            nn_dt <- data.table::data.table(nn_dt)
-
-            nn_dt[, from_cell_ID := cID[from]]
-            nn_dt[, to_cell_ID := cID[to]]
-            nn_dt[, uniq_ID := paste0(from, to)]
-            nn_dt[order(uniq_ID)]
-            nn_dt[, uniq_ID := NULL]
-            vert <- unique(x = c(nn_dt$from_cell_ID, nn_dt$to_cell_ID))
-            nn_network_igraph <- igraph::graph_from_data_frame(nn_dt[, .(from_cell_ID, to_cell_ID, weight, distance)], directed = TRUE, vertices = vert)
-
-            nn_info <- extract_NN_info(adata = adata, key_added = n_key_added_it)
-
-            net_type <- "kNN" # anndata default
-            if (("sNN" %in% n_key_added_it) & !is.null(n_key_added_it)) {
-                net_type <- "sNN"
-                net_name <- paste0(n_key_added_it, ".", nn_info["method"])
-            } else if (!("sNN" %in% n_key_added_it) & !is.null(n_key_added_it)) {
-                net_name <- paste0(n_key_added_it, ".", nn_info["method"])
+    for (key in names(expr_df_dict)) {
+        # If table name is used to extract su and ft
+        if (length(su_list_initial) == 0 && length(ft_list_initial) == 0 && length(strsplit(key, "_")[[1]]) >= 2) {
+            parts <- strsplit(key, "_")[[1]]
+            su <- parts[1]
+            su_list <- c(su_list, su)
+            if (length(parts) == 3) {
+                ft <- paste0(parts[2], "_", parts[3])
             } else {
-                net_name <- paste0(net_type, ".", nn_info["method"])
+                ft <- parts[2]
             }
+            ft_list <- c(ft_list, ft)
+            cat("Spatial unit and feature type extracted from table name.\n")
+        } else if (length(su_list_initial) > 0 && length(ft_list_initial) == 0) {
+            su <- spat_unit
+            ft <- "rna"
+            ft_list <- c(ft_list, ft)
+            cat("Only the spatial unit has been specified in function call. Default feature type has been set to rna.\n")
+        } else if (length(su_list_initial) == 0 && length(ft_list_initial) > 0) {
+            su <- "cell"
+            ft <- feat_type
+            su_list <- c(su_list, su)
+            cat("Only the feature type has been specified in function call. Default spatial unit has been set to cell.\n")
+        } else if (length(su_list_initial) > 0 && length(ft_list_initial) > 0) {
+            su <- spat_unit[[1]]
+            ft <- feat_type[[1]]
+            cat("Using spat_unit and feat_type specified in function call.\n")
+        } else {
+            su <- "cell"
+            ft <- "rna"
+            su_list <- c(su_list, su)
+            ft_list <- c(ft_list, ft)
+            cat("Default spatial unit and feature type have been set to [cell][rna]. If you wish to set a specific\nspatial unit and feature type, please specify it in the function call.\n")
+        }
 
-            netObj <- createNearestNetObj(
-                name = net_name,
-                network = nn_network_igraph,
-                spat_unit = spat_unit,
-                feat_type = feat_type
+        gobject <- setExpression(
+            gobject,
+            x = createExprObj(expr_df_dict[[key]], name = "raw"),
+            spat_unit = su,
+            feat_type = ft
+        )
+    }
+
+    # ID spat_unit and feat_type if not already provided.
+    if (is.null(spat_unit) && is.null(feat_type)) {
+        spat_unit <- su_list
+        feat_type <- ft_list
+    } else if (is.null(spat_unit) && !is.null(feat_type)) {
+        spat_unit <- su_list
+    } else if (!is.null(spat_unit) && is.null(feat_type)) {
+        feat_type <- ft_list
+    }
+
+    for (su in spat_unit) {
+        wrap_msg("Spatial unit(s)", su, "will be used in conversion.")
+    }
+    for (ft in feat_type) {
+        wrap_msg("Feature type(s)", ft, "will be used in conversion.")
+    }
+
+    cID_dict <- extract_cell_IDs(sdata)
+    fID_dict <- extract_feat_IDs(sdata)
+
+    ## Layers
+    lay_dict <- extract_layer_names(sdata)
+    if (!is.null(lay_dict)) {
+        for (key in names(lay_dict)) {
+            parts <- strsplit(key, "_")[[1]]
+            layer_su <- parts[1]
+            if (length(parts) == 3) {
+                layer_ft <- paste0(parts[2], "_", parts[3])
+            } else {
+                layer_ft <- parts[2]
+            }
+            for (l_n in lay_dict[[key]]) {
+                lay <- extract_layered_data(sdata, key, layer_name = l_n)
+                if ("data.frame" %in% class(lay)) {
+                    names(lay) <- fID_dict[[key]]
+                    row.names(lay) <- cID_dict[[key]]
+                } else {
+                    lay@Dimnames[[1]] <- fID_dict[[key]]
+                    lay@Dimnames[[2]] <- cID_dict[[key]]
+                }
+                parts <- strsplit(l_n, "_")[[1]]
+                if (length(parts) == 4) {
+                    name <- parts[4]
+                } else {
+                    name <- parts[3]
+                }
+                layExprObj <- createExprObj(lay, name = name)
+                gobject <- set_expression_values(
+                    gobject = gobject,
+                    spat_unit = layer_su,
+                    feat_type = layer_ft,
+                    values = layExprObj
+                )
+            }
+        }
+    }
+
+    # Extract polygons
+    polygon_dict <- extract_polygons(sdata)
+    for (su in names(polygon_dict)) {
+        gpoly_dt <- as.data.table(polygon_dict[[su]])
+        gpoly <- createGiottoPolygon(
+            gpoly_dt
+        )
+        gobject <- setPolygonInfo(gobject, gpoly, name = su)
+    }
+
+    gobject <- update_giotto_params(
+        gobject = gobject,
+        description = "_AnnData_Conversion"
+    )
+    # Extract spatial locations
+    spatial_dict <- extract_spatial(sdata)
+
+    # Set spatial locations
+    for (key in names(spatial_dict)) {
+        if (length(strsplit(key, "_")[[1]]) >= 2) {
+            parts <- strsplit(key, "_")[[1]]
+            spat_loc_su <- parts[1]
+            gobject <- setSpatialLocations(
+                gobject,
+                x = createSpatLocsObj(spatial_dict[[key]], name = "raw"),
+                spat_unit = spat_loc_su
             )
-
-            gobject <- set_NearestNetwork(
-                gobject = gobject,
-                nn_network = netObj,
-                spat_unit = spat_unit,
-                feat_type = feat_type,
-                nn_network_to_use = net_type,
-                network_name = net_name,
-                set_defaults = FALSE
+        } else {
+            gobject <- setSpatialLocations(
+                gobject,
+                x = createSpatLocsObj(spatial_dict[[key]], name = "raw"),
+                spat_unit = key
             )
         }
+    }
+    sp_dict <- parse_obsm_for_spat_locs(sdata)
+
+    # Spatial Enrichment
+    spat_enrich_all <- extract_spat_enrich(
+        sdata,
+        key_added = spat_enrich_key_added
+    )
+    num_spat_enrich <- length(spat_enrich_all)
+
+    if (is.null(spat_enrich_key_added) && !is.null(spat_enrich_all)) {
+        num_spat_enrich <- length(spat_enrich_all)
+    }
+
+    for (i in seq_len(num_spat_enrich)) {
+        if (inherits(spat_enrich_key_added, "list")) {
+            spat_enrich_key_added_it <- spat_enrich_key_added[[i]]
+        } else {
+            sk <- names(spat_enrich_all)[[i]]
+            split_key <- strsplit(gsub("[()']", "", sk), ", ")[[1]]
+            tn <- split_key[1]
+            tn_parts <- strsplit(tn, "_")[[1]]
+            se_su <- tn_parts[1]
+            se_ft <- tn_parts[2]
+            se_name <- split_key[2]
+            spat_enrich_key_added_it <- se_name
+        }
+        se <- spat_enrich_all[[i]]
+        spatEnrObj <- createSpatEnrObj(
+            se,
+            name = se_name,
+            spat_unit = se_su,
+            feat_type = se_ft
+        )
+        gobject <- setSpatialEnrichment(
+            gobject = gobject,
+            spatEnrObj
+        )
     }
 
     ## Spatial Network
-
     s_weights_sd <- NULL
     num_SN_nets <- length(spatial_n_key_added)
-
     # Check for the case where NULL is provided, since the
     # anndata object takes the default value for SN
 
     if (is.null(spatial_n_key_added) && !is.null(extract_SN_connectivities(sdata, key_added = spatial_n_key_added))) {
-        num_SN_nets <- 1
+        num_SN_nets <- length(extract_SN_connectivities(sdata, key_added = spatial_n_key_added))
     }
 
-    for (i in 1:num_SN_nets) {
+    for (i in seq_len(num_SN_nets)) {
         if (inherits(spatial_n_key_added, "list")) {
             spatial_n_key_added_it <- spatial_n_key_added[[i]]
         } else {
             spatial_n_key_added_it <- spatial_n_key_added
         }
 
-        s_weights_sd <- extract_SN_connectivities(sdata, key_added = spatial_n_key_added_it)
-        if (!is.null(s_weights_sd)) {
-            s_distances_sd <- extract_SN_distances(sdata, key_added = spatial_n_key_added_it)
-            ij_matrix <- methods::as(s_distances_sd, "TsparseMatrix")
-            from_idx <- ij_matrix@i + 1 # zero index!!!
-            to_idx <- ij_matrix@j + 1 # zero index!!!
+        s_weights_list <- extract_SN_connectivities(
+            sdata,
+            key_added = spatial_n_key_added_it
+        )
+        if (!is.null(s_weights_list)) {
+            for (connectivity_key in names(s_weights_list)) {
+                s_weights_sd <- s_weights_list[[connectivity_key]]
+                split_key <- strsplit(connectivity_key, ", ")[[1]]
+                tn <- gsub("[()']", "", split_key[1])
+                sk <- gsub("[()']", "", split_key[2])
 
-            # pre-allocate DT variables
-            from <- to <- weight <- distance <- from_cell_ID <- to_cell_ID <- uniq_ID <- NULL
-            sn_dt <- data.table::data.table(
-                from = from_idx,
-                to = to_idx,
-                weight = s_weights_sd@x,
-                distance = s_distances_sd@x
-            )
-
-            sn_dt[, from_cell_ID := cID[from]]
-            sn_dt[, to_cell_ID := cID[to]]
-
-            sdimx <- "sdimx"
-            sdimy <- "sdimy"
-            xbegin_name <- paste0(sdimx, "_begin")
-            ybegin_name <- paste0(sdimy, "_begin")
-            xend_name <- paste0(sdimx, "_end")
-            yend_name <- paste0(sdimy, "_end")
-
-            network_DT <- data.table::data.table(
-                from = sn_dt$from_cell_ID,
-                to = sn_dt$to_cell_ID,
-                xbegin_name = sp[sn_dt$from, sdimx],
-                ybegin_name = sp[sn_dt$from, sdimy],
-                xend_name = sp[sn_dt$to, sdimx],
-                yend_name = sp[sn_dt$to, sdimy],
-                weight = s_weights_sd@x,
-                distance = s_distances_sd@x
-            )
-            data.table::setnames(network_DT,
-                old = c("xbegin_name", "ybegin_name", "xend_name", "yend_name"),
-                new = c(xbegin_name, ybegin_name, xend_name, yend_name)
-            )
-            data.table::setorder(network_DT, from, to)
-
-            dist_mean <- get_distance(network_DT, method = "mean")
-            dist_median <- get_distance(network_DT, method = "median")
-            cellShapeObj <- list(
-                "meanCellDistance" = dist_mean,
-                "medianCellDistance" = dist_median
-            )
-
-            # TODO filter network?
-            # TODO 3D handling?
-            if (delaunay_spat_net) {
-                spatObj <- create_spat_net_obj(
-                    name = "sNN",
-                    method = "delaunay",
-                    networkDT = network_DT,
-                    cellShapeObj = cellShapeObj
+                s_distances_sd <- extract_SN_distances(
+                    sdata,
+                    key_added = spatial_n_key_added_it,
+                    tn = tn, sn_key_list = sk
                 )
-            } else {
-                spatObj <- create_spat_net_obj(
-                    name = "sNN",
-                    method = "non-delaunay",
-                    networkDT = network_DT,
-                    cellShapeObj = cellShapeObj
+                ij_matrix <- methods::as(s_distances_sd, "TsparseMatrix")
+                from_idx <- ij_matrix@i + 1 # zero index!!!
+                to_idx <- ij_matrix@j + 1 # zero index!!!
+
+                # pre-allocate DT variables
+                from <- to <- weight <- distance <- from_cell_ID <- to_cell_ID <- uniq_ID <- NULL
+                sn_dt <- data.table::data.table(
+                    from = from_idx,
+                    to = to_idx,
+                    weight = s_weights_sd@x,
+                    distance = s_distances_sd@x
+                )
+                cID <- cID_dict[[tn]]
+                sn_dt[, from_cell_ID := cID[from]]
+                sn_dt[, to_cell_ID := cID[to]]
+
+                sdimx <- "sdimx"
+                sdimy <- "sdimy"
+                xbegin_name <- paste0(sdimx, "_begin")
+                ybegin_name <- paste0(sdimy, "_begin")
+                xend_name <- paste0(sdimx, "_end")
+                yend_name <- paste0(sdimy, "_end")
+
+                network_DT <- data.table::data.table(
+                    from = unlist(sn_dt$from_cell_ID),
+                    to = unlist(sn_dt$to_cell_ID),
+                    xbegin_name = sp_dict[[tn]][sn_dt$from, sdimx],
+                    ybegin_name = sp_dict[[tn]][sn_dt$from, sdimy],
+                    xend_name = sp_dict[[tn]][sn_dt$to, sdimx],
+                    yend_name = sp_dict[[tn]][sn_dt$to, sdimy],
+                    weight = s_weights_sd@x,
+                    distance = s_distances_sd@x
+                )
+                data.table::setnames(network_DT,
+                    old = c("xbegin_name", "ybegin_name", "xend_name", "yend_name"),
+                    new = c(xbegin_name, ybegin_name, xend_name, yend_name)
+                )
+                data.table::setorder(network_DT, from, to)
+                dist_mean <- get_distance(network_DT, method = "mean")
+                dist_median <- get_distance(network_DT, method = "median")
+                cellShapeObj <- list(
+                    "meanCellDistance" = dist_mean,
+                    "medianCellDistance" = dist_median
+                )
+
+                # TODO filter network?
+                # TODO 3D handling?
+                net_name <- strsplit(sk, "_")[[1]][1]
+                if (net_name == "Delaunay") {
+                    spatObj <- createSpatNetObj(
+                        network = network_DT,
+                        name = "Delaunay_network",
+                        method = "delaunay",
+                        networkDT_before_filter = network_DT,
+                        cellShapeObj = cellShapeObj
+                    )
+                } else {
+                    net_name <- sub("_connectivities", "", sk)
+                    spatObj <- createSpatNetObj(
+                        network = network_DT,
+                        name = net_name,
+                        method = "non-delaunay",
+                        networkDT_before_filter = network_DT,
+                        cellShapeObj = cellShapeObj
+                    )
+                }
+                gobject <- set_spatialNetwork(
+                    gobject = gobject,
+                    spatial_network = spatObj,
+                    spat_unit = strsplit(tn, "_")[[1]][1]
                 )
             }
-
-            gobject <- set_spatialNetwork(
-                gobject = gobject,
-                spatial_network = spatObj,
-                name = "sNN"
-            )
         }
+    }
+
+    # Dimension reduction
+    ## Add PCA
+    p_dict <- extract_pca(sdata)
+    if (!is.null(p_dict)) {
+        for (tn in names(p_dict)) {
+            for (i in seq_along(p_dict[[tn]][[1]])) {
+                p <- p_dict[[tn]][[1]][[i]]
+                if (!is.null(p)) {
+                    pca_name <- names(p_dict[[tn]][[1]])[[i]]
+                    pca <- p[["pca"]]
+                    evs <- if (!is.null(p[["eigenvalues"]])) p[["eigenvalues"]] else NULL
+                    loads <- if (!is.null(p[["loadings"]])) p[["loadings"]] else NULL
+                    parts <- strsplit(tn, "_")[[1]]
+                    pca_su <- parts[1]
+                    pca_ft <- parts[2]
+                    rownames_vec <- if (!is.null(expr_df_dict[[tn]])) colnames(expr_df_dict[[tn]]) else NULL
+                    dobj <- createDimObj(
+                        coordinates = pca,
+                        name = pca_name,
+                        spat_unit = pca_su,
+                        feat_type = pca_ft,
+                        method = "pca",
+                        reduction = "cells",
+                        provenance = NULL,
+                        misc = list(
+                            eigenvalues = evs,
+                            loadings = loads
+                        ),
+                        my_rownames = rownames_vec
+                    )
+                    gobject <- set_dimReduction(
+                        gobject = gobject,
+                        dimObject = dobj
+                    )
+                }
+            }
+        }
+    }
+
+    # Add UMAP
+    u_dict <- extract_umap(sdata)
+    if (!is.null(u_dict)) {
+        for (tn in names(u_dict)) {
+            for (i in seq_along(u_dict[[tn]][[1]])) {
+                u <- u_dict[[tn]][[1]][[i]]
+                if (!is.null(u)) {
+                    umap_name <- names(u_dict[[tn]][[1]])[[i]]
+                    parts <- strsplit(tn, "_")[[1]]
+                    umap_su <- parts[1]
+                    umap_ft <- parts[2]
+                    rownames_vec <- if (!is.null(expr_df_dict[[tn]])) colnames(expr_df_dict[[tn]]) else NULL
+                    dobj <- createDimObj(
+                        coordinates = u,
+                        name = umap_name,
+                        spat_unit = umap_su,
+                        feat_type = umap_ft,
+                        method = "umap",
+                        reduction = "cells",
+                        provenance = NULL,
+                        misc = NULL,
+                        my_rownames = rownames_vec
+                    )
+                    gobject <- set_dimReduction(
+                        gobject = gobject,
+                        dimObject = dobj
+                    )
+                }
+            }
+        }
+    }
+
+    # Add tSNE
+    t_dict <- extract_tsne(sdata)
+    if (!is.null(t_dict)) {
+        for (tn in names(t_dict)) {
+            for (i in seq_along(t_dict[[tn]][[1]])) {
+                t <- t_dict[[tn]][[1]][[i]]
+                if (!is.null(t)) {
+                    tsne_name <- names(t_dict[[tn]][[1]])[[i]]
+                    parts <- strsplit(tn, "_")[[1]]
+                    tsne_su <- parts[1]
+                    tsne_ft <- parts[2]
+                    rownames_vec <- if (!is.null(expr_df_dict[[tn]])) colnames(expr_df_dict[[tn]]) else NULL
+                    dobj <- createDimObj(
+                        coordinates = t,
+                        name = tsne_name,
+                        spat_unit = tsne_su,
+                        feat_type = tsne_ft,
+                        method = "tsne",
+                        reduction = "cells",
+                        provenance = NULL,
+                        misc = NULL,
+                        my_rownames = rownames_vec
+                    )
+                    gobject <- set_dimReduction(
+                        gobject = gobject, dimObject = dobj
+                    )
+                }
+            }
+        }
+    }
+
+    ## Nearest Network
+    weights_sd_all <- extract_NN_connectivities(sdata, key_added = n_key_added)
+    num_NN_nets <- length(n_key_added)
+
+    if (is.null(n_key_added) && !is.null(weights_sd_all)) {
+        num_NN_nets <- length(weights_sd_all)
+    }
+
+    for (i in seq_len(num_NN_nets)) {
+        if (inherits(n_key_added, "list")) {
+            n_key_added_it <- n_key_added[[i]]
+        } else {
+            n_key_added_it <- n_key_added
+        }
+
+        weights_list <- extract_NN_connectivities(sdata, key_added = n_key_added_it)
+        if (!is.null(weights_list)) {
+            for (connectivity_key in names(weights_list)) {
+                weights_sd <- weights_list[[connectivity_key]]
+                split_key <- strsplit(connectivity_key, ", ")[[1]]
+                tn <- gsub("[()']", "", split_key[1])
+                nk <- gsub("[()']", "", split_key[2])
+
+                distances_sd <- extract_NN_distances(
+                    sdata,
+                    key_added = n_key_added_it,
+                    tn = tn, nn_key_list = nk
+                )
+
+                nn_dt <- align_network_data(
+                    distances = weights_sd, weights = distances_sd
+                )
+
+                # pre-allocate DT variables
+                from <- to <- weight <- distance <- from_cell_ID <- to_cell_ID <- uniq_ID <- NULL
+                nn_dt <- data.table::data.table(nn_dt)
+                cID <- cID_dict[[tn]]
+                nn_dt[, from_cell_ID := cID[from]]
+                nn_dt[, to_cell_ID := cID[to]]
+                nn_dt[, from_cell_ID := as.character(from_cell_ID)]
+                nn_dt[, to_cell_ID := as.character(to_cell_ID)]
+                nn_dt[, uniq_ID := paste0(from, to)]
+                nn_dt[order(uniq_ID)]
+                nn_dt[, uniq_ID := NULL]
+                vert <- unique(x = c(nn_dt$from_cell_ID, nn_dt$to_cell_ID))
+                nn_network_igraph <- igraph::graph_from_data_frame(
+                    nn_dt[, .(from_cell_ID, to_cell_ID, weight, distance)],
+                    directed = TRUE, vertices = vert
+                )
+
+                nn_info <- extract_NN_info(
+                    sdata = sdata, key_added = n_key_added_it, tn = tn
+                )
+
+                net_type <- "kNN" # anndata default
+                if (("sNN" %in% n_key_added_it) & !is.null(n_key_added_it)) {
+                    net_type <- "sNN"
+                    net_name <- paste0(n_key_added_it, ".", nn_info["method"])
+                } else if (!("sNN" %in% n_key_added_it) & !is.null(nk)) {
+                    net_name <- sub("_connectivities", "", nk)
+                } else {
+                    net_name <- paste0(net_type, ".", nn_info["method"])
+                }
+                parts <- strsplit(tn, "_")[[1]]
+                nn_su <- parts[1]
+                nn_ft <- parts[2]
+                netObj <- createNearestNetObj(
+                    name = net_name,
+                    network = nn_network_igraph,
+                    spat_unit = nn_su,
+                    feat_type = nn_ft
+                )
+
+                gobject <- set_NearestNetwork(
+                    gobject = gobject,
+                    nn_network = netObj,
+                    spat_unit = nn_su,
+                    feat_type = nn_ft,
+                    nn_network_to_use = net_type,
+                    network_name = net_name,
+                    set_defaults = FALSE
+                )
+            }
+        }
+    }
+
+    # Attach hires image
+    extracted_images <- extract_image(sdata)
+    extract_image_names <- extract_image_names(sdata)
+
+    raster_image_list <- lapply(extracted_images, terra::rast)
+    large_image_list <- createGiottoLargeImageList(
+        raster_image_list,
+        names = extract_image_names
+    )
+    gobject <- addGiottoLargeImage(
+        gobject = gobject, largeImages = large_image_list
+    )
+
+    # Extract points
+    point_dict <- extract_points(sdata)
+    for (ft in names(point_dict)) {
+        gpoint_dt <- as.data.table(point_dict[[ft]])
+        gpoint <- createGiottoPoints(
+            gpoint_dt,
+            feat_type = ft
+        )
+        gobject <- setGiotto(
+            gobject,
+            gpoint
+        )
     }
     return(gobject)
 }
@@ -3732,12 +4153,14 @@ spatialdataToGiotto <- function(
 #' @param spat_unit spatial unit which will be used in conversion
 #' @param feat_type feature type which will be used in conversion
 #' @param spot_radius radius of the spots
-#' @param python_path path to python executable within a conda/miniconda environment
+#' @param python_path path to python executable within a conda/miniconda
+#' environment
 #' @param env_name name of environment containing python_path executable
 #' @param save_directory directory in which the SpatialData object will be saved
 #'
 #' @return SpatialData object saved on disk.
-#' @details Function in beta. Converts and saves a Giotto object in SpatialData format on disk.
+#' @details Function in beta. Converts and saves a Giotto object in SpatialData
+#' format on disk.
 #' @export
 
 giottoToSpatialData <- function(
@@ -3748,9 +4171,12 @@ giottoToSpatialData <- function(
         python_path = NULL,
         env_name = NULL,
         save_directory = NULL) {
-
     # Initialize reticulate
     instrs <- createGiottoInstructions(python_path = python_path)
+
+    if (dir.exists(save_directory)) {
+        stop("save_directory must be a non-existing directory")
+    }
 
     # Check spatialdata dependencies
     package_check(
@@ -3762,12 +4188,26 @@ giottoToSpatialData <- function(
     g2sd_path <- system.file("python", "g2sd.py", package = "GiottoClass")
     reticulate::source_python(g2sd_path)
 
-    # Get metadata
-    spat_unit <- activeSpatUnit(gobject)
-    feat_type <- activeFeatType(gobject)
+    spat_unit <- spat_unit %null% spatUnit(gobject)
+    feat_type <- feat_type %null% featType(gobject)
+
+    for (su in spat_unit) {
+        wrap_msg("Spatial unit(s)", su, "will be used in conversion.")
+    }
+    for (ft in feat_type) {
+        wrap_msg("Feature type(s)", ft, "will be used in conversion.")
+    }
 
     # Create a temporary folder to hold anndata
-    temp <- "temp_anndata/"
+    temp <- "temp_conversion_files/"
+    # Delete temporary files and folders when done
+    on.exit(
+        {
+            if (dir.exists(temp)) unlink(temp, recursive = TRUE)
+        },
+        add = TRUE
+    )
+
 
     # First, convert Giotto object to AnnData using an existing function
     giottoToAnnData(
@@ -3779,32 +4219,64 @@ giottoToSpatialData <- function(
         save_directory = temp
     )
 
-    # Extract GiottoImage
-    gimg <- getGiottoImage(gobject, image_type = "largeImage")
+    # Extract GiottoImage only if an image exists
+    images_exist <- NULL
+    if (length(slot(gobject, "images")) > 0) {
+        images_exist <- TRUE
+        gimg_list <- slot(gobject, "images")
+        for (i in seq_along(gimg_list)) {
+            img_name <- slot(gimg_list[[i]], "name")
+            writeGiottoLargeImage(
+                giottoLargeImage = gimg_list[[i]],
+                gobject = gobject,
+                largeImage_name = img_name,
+                filename = paste0(temp, img_name, ".png"),
+                dataType = NULL,
+                max_intensity = NULL,
+                overwrite = TRUE,
+                verbose = TRUE
+            )
+        }
+    }
 
-    # Temporarily save the image to disk
-    writeGiottoLargeImage(
-        giottoLargeImage = gimg,
-        gobject = gobject,
-        largeImage_name = "largeImage",
-        filename = "temp_image.png",
-        dataType = NULL,
-        max_intensity = NULL,
-        overwrite = TRUE,
-        verbose = TRUE
-    )
+    # Extract polygons
+    if (!is.null(list_spatial_info(gobject))) {
+        dir.create(paste0(temp, "shapes"))
+        for (su in spat_unit) {
+            gpoly <- getPolygonInfo(gobject, polygon_name = su)
+            gpoly_sf <- as.sf(gpoly)
+            sf::st_write(gpoly_sf, paste0(temp, "shapes/", su, ".geojson"),
+                delete_dsn = TRUE
+            )
+        }
+    }
 
-    spat_locs <- getSpatialLocations(gobject, output="data.table")
+    # Extract points
+    if (!is.null(list_feature_info(gobject))) {
+        dir.create(paste0(temp, "points"))
+        for (ft in feat_type) {
+            gpoint <- getFeatureInfo(gobject, feat_type = ft)
+            gpoint_dt <- as.data.table(gpoint, geom = "XY")
+            fwrite(gpoint_dt, paste0(temp, "points/", ft, ".csv"),
+                sep = ",", row.names = FALSE
+            )
+        }
+    }
 
     # Create SpatialData object
-    createSpatialData(temp, spat_locs, spot_radius, save_directory)
+    createSpatialData(temp, save_directory, images_exist)
 
-    # Delete temporary files and folders
-    unlink("temp_image.png")
-    unlink("temp_image.png.aux.xml")
-    unlink(temp, recursive = TRUE)
+    # copy over giotto metadata
+    dir.create(file.path(save_directory, "giotto_meta"))
+    file.copy(
+        from = file.path(temp, "giotto_meta"),
+        to = save_directory,
+        recursive = TRUE
+    )
 
     # Successful Conversion
-    cat("Giotto object has been converted and saved to SpatialData object at: ", save_directory, "\n")
-
+    cat(
+        "Giotto object has been converted and saved to SpatialData object at: ",
+        save_directory, "\n"
+    )
 }

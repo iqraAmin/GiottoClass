@@ -50,7 +50,7 @@ polygon_to_raster <- function(polygon, field = NULL) {
     }
 
     # ensure that field is numerical
-    polygon$poly_i <- seq_len(nrow(unique(polygon[[field]])))
+    polygon$poly_i <- seq_len(nrow(polygon))
     poly_rast <- terra::rasterize(x = polygon, r, field = "poly_i")
 
     poly_ID_vector <- polygon[[field]][, 1]
@@ -121,7 +121,7 @@ polygon_to_raster <- function(polygon, field = NULL) {
 #' overlaps_z1$rna
 #'
 #' # overlap image to get sum intensities per cell
-#' out_img <- calculateOverlap(gpoly, gimg)
+#' out_img <- calculateOverlap(gpoly, gimg, progress = FALSE)
 #' overlaps_img <- overlaps(out_img)
 #' overlaps_img$intensity
 #'
@@ -371,11 +371,39 @@ setMethod(
         calculateOverlap(
             x = x,
             y = y@raster_object,
-            name_overlap = objName(y),
+            name_overlap = name_overlap %null% objName(y),
             poly_subset_ids = poly_subset_ids,
             verbose = verbose,
             ...
         )
+    }
+)
+
+# * giottoPolygon giottoAffineImage ####
+#' @rdname calculateOverlap
+#' @export
+setMethod(
+    "calculateOverlap", signature(x = "giottoPolygon", y = "giottoAffineImage"),
+    function(x, y,
+    name_overlap = NULL,
+    poly_subset_ids = NULL,
+    return_gpolygon = TRUE,
+    verbose = TRUE,
+    ...) {
+        aff <- y@affine
+        res <- calculateOverlap(
+            x = affine(x, aff, inv = TRUE),
+            y = y@raster_object,
+            name_overlap = name_overlap %null% objName(y),
+            poly_subset_ids = poly_subset_ids,
+            verbose = verbose,
+            ...
+        )
+        x@overlaps <- res@overlaps
+        if (is.null(centroids(x))) {
+            x <- centroids(x, append_gpolygon = TRUE)
+        }
+        x
     }
 )
 
@@ -392,7 +420,7 @@ setMethod(
     verbose = TRUE,
     ...) {
         if (is.null(name_overlap)) {
-            .gstop("calculateOverlap: name_overlap must be given")
+            stop("calculateOverlap: name_overlap must be given", call. = FALSE)
         }
 
         res <- calculateOverlap(
@@ -408,7 +436,6 @@ setMethod(
             if (is.null(centroids(x))) {
                 x <- centroids(x, append_gpolygon = TRUE)
             }
-
             x@overlaps[["intensity"]][[name_overlap]] <- res
             return(x)
         } else {
@@ -437,7 +464,13 @@ setMethod(
         checkmate::assert_true(terra::is.polygons(x))
         GiottoUtils::package_check("exactextractr")
 
+        # channel naming (catch if none or too few)
         image_names <- names(y)
+        nchannel <- terra::nlyr(y)
+        if (is.null(image_names) ||
+            nchannel > 1L && length(unique(image_names)) == 1L) {
+            names(y) <- sprintf("channel_%d", seq_len(nchannel))
+        }
 
         # NSE vars
         coverage_fraction <- NULL
@@ -464,6 +497,16 @@ setMethod(
 
         # rbind and convert output to data.table
         dt_exact <- data.table::as.data.table(do.call("rbind", extract_res))
+
+        missing_ids <- setdiff(x$poly_ID, dt_exact$poly_ID)
+        if (length(missing_ids) > 0L) {
+            missing_dt <- data.table::data.table(poly_ID = missing_ids)
+            # fill out missing_dt with 0 values so it can be used to rbind
+            for (col in setdiff(names(dt_exact), names(missing_dt))) {
+                missing_dt[, (col) := 0]
+            }
+            dt_exact <- rbind(dt_exact, missing_dt)
+        }
 
         # prepare output
         colnames(dt_exact)[2:(length(image_names) + 1)] <- image_names
@@ -1338,11 +1381,10 @@ setMethod(
 
         # ensure data exists
         if (is.null(overlaps_data)) {
-            .gstop(
+            stop(wrap_txt(
                 "No overlaps found between", objName(x), "and", feat_info, "
-        Please run calculateOverlap() first.",
-                .n = 2L
-            )
+                Please run calculateOverlap() first."
+            ), call. = FALSE)
         }
 
         argslist <- list(

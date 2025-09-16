@@ -12,7 +12,8 @@
 #' mgimg <- as(g_image, "giottoImage")
 #'
 #' a <- convert_mgImage_to_array_DT(mgimg)
-#' force(a);force(a)
+#' force(a)
+#' force(a)
 #' @export
 convert_mgImage_to_array_DT <- function(mg_object) {
     if (inherits(mg_object, "giottoImage")) {
@@ -195,7 +196,7 @@ changeImageBg <- function(mg_object,
 get_img_minmax <- function(mg_img,
     negative_y = TRUE) {
     deprecate_soft(what = "get_img_minmax()", with = "ext()", when = "0.3.1")
-    
+
     # Get magick object dimensions. xmin and ymax assumed to be 0.
     info <- magick::image_info(mg_img)
     img_xmax <- info$width # width
@@ -236,13 +237,14 @@ get_adj_rescale_img <- function(img_minmax,
     spatial_locs,
     scale_factor = 1) {
     deprecate_warn(
-        "0.3.1", what = "get_adj_rescale_img()",
+        "0.3.1",
+        what = "get_adj_rescale_img()",
         details = c(
             "this is too specific to the inner workings of `giottoImage`",
             "We can simply use `ext<-` to set a new extent instead of this."
         )
     )
-    
+
     # Expand scale_factor if needed
     if (length(scale_factor) == 1) {
         scale_factor <- c(x = scale_factor, y = scale_factor)
@@ -277,17 +279,23 @@ get_adj_rescale_img <- function(img_minmax,
 }
 
 # save a magick image to disk and return the filepath
-# can be loaded in with terra or used with getOption("viewer")() downstream 
+# can be loaded in with terra or used with getOption("viewer")() downstream
 # based on magick:::image_preview()
 # accepts a single `magick-image` object
-.magick_preview <- function(x, tempname = "preview") {
+# only returns depth 8 images. DO NOT use for analyzed values
+.magick_preview <- function(
+        x,
+        basename = "preview",
+        filename = NULL) {
     stopifnot(inherits(x, "magick-image"))
     stopifnot(length(x) == 1L)
     format <- tolower(magick::image_info(x[1])$format)
-    tmp <- file.path(tempdir(), paste(tempname, format, sep = "."))
+    if (is.null(filename)) {
+        filename <- file.path(tempdir(), paste(basename, format, sep = "."))
+    }
     vmsg(.is_debug = TRUE, "`.magick_preview()` saving as", format)
-    image_write(x, path = tmp, format = format, depth = 8)
-    return(tmp)
+    magick::image_write(x, path = filename, format = format, depth = 8)
+    return(filename)
 }
 
 #' @title addGiottoImageMG
@@ -674,7 +682,7 @@ reconnect_giottoImage_MG <- function(
 #' @keywords internal
 #' @returns spatRaster object
 .create_terra_spatraster <- function(image_path) {
-    raster_object <- try(suppressWarnings(terra::rast(x = image_path)))
+    raster_object <- try(terra::rast(x = image_path, noflip = TRUE))
     if (inherits(raster_object, "try-error")) {
         stop(raster_object, " can not be read by terra::rast() \n")
     }
@@ -701,12 +709,12 @@ reconnect_giottoImage_MG <- function(
 #' @keywords internal
 .spatraster_sample_values <- function(raster_object,
     size = 5000,
-    output = c("data.frame", "array", "magick", "EBImage"),
+    output = c("data.frame", "array", "magick", "EBImage", "SpatRaster"),
     verbose = NULL,
     ...) {
     output <- match.arg(
         arg = output,
-        choices = c("data.frame", "array", "magick", "EBImage")
+        choices = c("data.frame", "array", "magick", "EBImage", "SpatRaster")
     )
 
     # account for possible giottoLargeImage input
@@ -736,6 +744,7 @@ reconnect_giottoImage_MG <- function(
     if (isTRUE(argslist$as.df)) {
         res <- stats::na.omit(res) # data.frame remove NAs
     } else {
+        if (output == "SpatRaster") return(res)
         # all others
         res <- terra::as.array(res)
         na_bool <- is.na(res)
@@ -1569,7 +1578,7 @@ convertGiottoLargeImageToMG <- function(gobject = NULL,
 #'
 #' writeGiottoLargeImage(
 #'     gobject = g, largeImage_name = "image",
-#'     filename = paste0("tempfile()", ".png")
+#'     filename = paste0(tempfile(), ".png")
 #' )
 #' @export
 writeGiottoLargeImage <- function(giottoLargeImage = NULL,
@@ -2027,8 +2036,8 @@ plotGiottoImage <- function(gobject = NULL,
             gobject = gobject,
             name = image_name
         )
-        if (inherits(img_obj, "giottoLargeImage")) image_type = "largeImage"
-        if (inherits(img_obj, "giottoImage")) image_type = "image"
+        if (inherits(img_obj, "giottoLargeImage")) image_type <- "largeImage"
+        if (inherits(img_obj, "giottoImage")) image_type <- "image"
     }
     if (!is.null(giottoImage)) {
         img_obj <- giottoImage
@@ -2659,11 +2668,11 @@ setMethod(
 .density_giottolargeimage <- function(x, show_max = TRUE, ...) {
     a <- list(x = x@raster_object, ...)
     res <- do.call(terra::density, args = a)
-    
+
     if (isFALSE(a$plot)) {
         return(res)
     }
-    
+
     if (isTRUE(show_max)) {
         graphics::abline(v = x@max_window, col = "red")
     }
@@ -2730,26 +2739,63 @@ add_img_array_alpha <- function(x,
 
 
 
+
+# doDeferred ####
+
+#' @name doDeferred
+#' @title Perform deferred/lazy operations
+#' @description Force deferred/lazy operations.
+#' @param x object to force deferred operations in
+#' @param ... additional args to pass
+#' @returns giottoLargeImage
+NULL
+
+#' @rdname doDeferred
+#' @param size numeric. Minimum number of image pixels to render when
+#' evaluating
+#' @param filename character. Full filepath to write the rendered image to. If
+#' `NULL`, a file in `tempdir()` will be generated.
+#' @examples
+#' gimg <- GiottoData::loadSubObjectMini("giottoLargeImage")
+#' affimg <- spin(gimg, 45) # lazily performs affine
+#'
+#' # force the affine operation and render the output with at least 5e5 px
+#' gimg2 <- doDeferred(affimg, size = 5e5)
+#' # **This is mainly intended for visualization.**
+#' # This process saves with image depth of 8.
+#' # Spatially transformed raster values are not preferred for analysis
+#' @export
+setMethod(
+    "doDeferred", signature("giottoAffineImage"),
+    function(x, size = 5e5, filename = NULL, ...) {
+        x@funs$realize_magick(filename = filename, size = size, ...)
+    }
+)
+
+
+
 # converters ####
 
 
-#' @title Convert ome.tif to tif
-#' @name ometif_to_tif
+#' @title Convert Specialized TIF Formats to Basic TIF
+#' @name to_simple_tif
 #' @description
-#' Simple converter from .ome.tif to .tif format. Utilizes the python
+#' Simple converter from specialized formats to .tif format. Utilizes the python
 #' \pkg{tifffile} package. Performs image conversions one page at a time.
-#' Wrap this in a for loop or lapply for more than one image or page.
-#' @param input_file character. Filepath to ome.tif to convert
+#' Wrap this in a for loop or lapply for more than one image or page. Used
+#' when image formats are unsupported by terra. This is implementation may
+#' change in the future. Currently tested to work with `.ome.tif` and `qptiff`
+#' @param input_file character. Filepath to tif to convert
 #' @param output_dir character. Directory to write .tif to. Defaults to a new
-#' folder in the directory called "tif_exports"
+#' folder in the directory called `"tif_exports"`
 #' @param page numeric. Which page of the tif to open (if needed). If provided,
 #' a "_%04d" formatted suffix will be added to the output filename.
 #' @param overwrite logical. Default = FALSE. Whether to overwrite if the
 #' filename already exists.
 #' @returns returns the written filepath invisibly
-#' @family ometif utility functions
+#' @family tif utility functions
 #' @export
-ometif_to_tif <- function(input_file,
+to_simple_tif <- function(input_file,
     output_dir = file.path(dirname(input_file), "tif_exports"),
     page,
     overwrite = FALSE) {
@@ -2757,15 +2803,15 @@ ometif_to_tif <- function(input_file,
 
     # get tifffile py
     package_check(
-        pkg_name = c("tifffile", "imagecodecs"), 
+        pkg_name = c("tifffile", "imagecodecs"),
         repository = c("pip:tifffile", "pip:imagecodecs")
     )
-    
-    ometif2tif_path <- system.file(
-        "python", "ometif_convert.py",
+
+    py_tif_convert_path <- system.file(
+        "python", "tif_convert.py",
         package = "GiottoClass"
     )
-    reticulate::source_python(ometif2tif_path)
+    reticulate::source_python(py_tif_convert_path)
     # ensure output directory exists
     if (!checkmate::test_directory_exists(output_dir)) {
         dir.create(output_dir, recursive = TRUE)
@@ -2781,9 +2827,17 @@ ometif_to_tif <- function(input_file,
     }
     a$page <- a$page - 1L # zero indexed
 
+    fext_pattern <- ".ome.tif$" # default
+    if (all(c("ome", "tif") %in% file_extension(input_file))) {
+        fext_pattern <- ".ome.tif$"
+    }
+    if ("qptiff" %in% file_extension(input_file)) {
+        fext_pattern <- ".qptiff$"
+    }
+
     # decide output filename
     fname <- sub(
-        pattern = ".ome.tif$", replacement = "",
+        pattern = fext_pattern, replacement = "",
         x = basename(input_file)
     )
     fpath <- file.path(
@@ -2801,33 +2855,60 @@ ometif_to_tif <- function(input_file,
             )
         }
     }
-    do.call(ometif_2_tif, args = a)
+    do.call(py_tif_convert, args = a)
     return(invisible(fpath))
 }
 
+#' @describeIn to_simple_tif deprecated.
+#' @export
+ometif_to_tif <- to_simple_tif
 
 
 
-#' @name ometif_metadata
-#' @title Read metadata of an ometif
+
+#' @name tif_metadata
+#' @title Read Metadata of a Specialized tif
 #' @description Use the python package tifffile to get the the XML metadata
-#' of a .ome.tif file. The R package xml2 is then used to work with it to
+#' of a .tif file. The R package \{xml2\} is then used to work with it to
 #' retrieve specific nodes in the xml data and extract data.
-#' @param path character. filepath to .ome.tif image
+#' @param path character. filepath to tif image
 #' @param node character vector. Specific xml node to get. More terms can be
 #' added to get a node from a specific hierarchy.
+#' @param page numeric. Specific page to get metadata from. Currently only used
+#' for `.qptiff`.
+#' @param type character. Type of data to extract. Only affects
+#' `output = data.frame` (Matches to one of "attribute", "text", "double",
+#' "integer"). `output = "structure"` can help
+#' with figuring out which is most appropriate.
 #' @param output character. One of "data.frame" to return a data.frame of the
-#' attributes information of the xml node, "xmL" for an xml2 representation
+#' attributes information of the xml node, "xmL" for an \{xml2\} representation
 #' of the node, "list" for an R native list (note that many items in the
-#' list may have overlapping names that make indexing difficult), or 
+#' list may have overlapping names that make indexing difficult), or
 #' "structure" to invisibly return NULL, but print the structure of the XML
 #' document or node.
 #' @returns list of image metadata information
-#' @family ometif utility functions
+#' @examples
+#' if (FALSE) {
+#' # check structure of metadata
+#' tif_metadata("path/to/ometif", output = "structure")
+#'
+#' # xenium morphology ometif - find channels/biomarkers
+#' tif_metadata("path/to/ometif", node = "Channel")
+#'
+#' # phenocycler qptiff - find channels/biomarkers
+#' tif_metadata("path/to/qptiff",
+#'     page = NULL,
+#'     node = "Biomarker",
+#'     type = "text"
+#' )
+#' }
+#' @family tif utility functions
 #' @export
-ometif_metadata <- function(
-        path, node = NULL, output = c("data.frame", "xml", "list", "structure")
-) {
+tif_metadata <- function(path,
+    node = NULL,
+    page = NULL,
+    type = c("attribute", "text", "double", "integer"),
+    output = c("data.frame", "xml", "list", "structure")) {
     checkmate::assert_file_exists(path)
     package_check(
         pkg_name = c("tifffile", "xml2"),
@@ -2836,26 +2917,113 @@ ometif_metadata <- function(
 
     TIF <- reticulate::import("tifffile", convert = TRUE, delay_load = TRUE)
     img <- TIF$TiffFile(path)
-    output <- match.arg(
-        output, choices = c("data.frame", "xml", "list", "structure")
+    output <- match.arg(output,
+        choices = c("data.frame", "xml", "list", "structure")
     )
-    x <- xml2::read_xml(img$ome_metadata)
+    type <- match.arg(type,
+        choices = c("attribute", "text", "double", "integer")
+    )
+
+    .tif_metadata_extract(
+        img = img,
+        node = node,
+        page = page,
+        type = type,
+        output = output
+    )
+}
+
+#' @describeIn tif_metadata deprecated.
+#' @export
+ometif_metadata <- tif_metadata
+
+
+.tif_metadata_extract <- function(img, node, page = NULL, type, output) {
+    npages <- length(img$series[[1L]]$pages)
+    if (is.null(page)) page <- seq_len(npages)
+    # ensure pages are in subscript bounds
+    if (any(page > npages)) {
+        oob_bool <- page > npages
+        oob_pages <- page[oob_bool]
+        warning(
+            sprintf("pages %s do not exist",
+                    paste(collapse = ", ", oob_pages)
+            ), call. = FALSE
+        )
+        page <- page[!oob_bool]
+    }
+    # if multiple pages, lapply recurse
+    if (length(page) > 1L && img$is_qpi) {
+        reslist <- lapply(page, function(p) {
+            data <- .tif_metadata_extract(
+                img = img,
+                node = node,
+                page = p,
+                type = type,
+                output = output
+            )
+        })
+        if (inherits(reslist[[1]], "data.frame")) {
+            reslist <- Reduce(rbind, reslist)
+        }
+        return(reslist)
+    }
+
+
+
+    if (img$is_ome) x <- img$ome_metadata
+    else if (img$is_fluoview) x <- img$fluoview_metadata
+    else if (img$is_nih) x <- img$nih_metadata
+    else if (img$is_astrotiff) x <- img$astrotiff_metadata
+    else if (img$is_imagej) x <- img$imagej_metadata
+    else if (img$is_lsm) x <- img$lsm_metadata
+    else if (img$is_qpi) x <- img$series[[1]]$pages[[page - 1L]]$description
+    else if (img$is_micromanager) x <- img$micromanager_metadata
+    else stop("unrecognized tif format\n", call. = FALSE)
+
+    x <- xml2::read_xml(x)
+    ns <- xml2::xml_ns(x)
+    has_namespace <- length(ns) > 0L
 
     if (!is.null(node)) {
         node <- paste(node, collapse = "/")
-        x <- xml2::xml_find_all(
-            x, sprintf("//d1:%s", node), 
-            ns = xml2::xml_ns(x)
-        )
+        if (has_namespace) {
+            x <- xml2::xml_find_all(
+                x, sprintf("//d1:%s", node),
+                ns = xml2::xml_ns(x)
+            )
+        } else {
+            x <- xml2::xml_find_all(
+                x, sprintf("//%s", node)
+            )
+        }
     }
-        
+
     switch(output,
         "data.frame" = {
-            x = Reduce("rbind", xml2::xml_attrs(x))
-            rownames(x) <- NULL
-            x <- as.data.frame(x)
-            return(x)
-        }, 
+            switch(type,
+                "attribute" = {
+                    x <- Reduce("rbind", xml2::xml_attrs(x))
+                    rownames(x) <- NULL
+                    return(as.data.frame(x))
+                },
+                "text" = {
+                    x <- (as.data.frame(xml2::xml_text(x)))
+                    colnames(x) <- node
+                    return(x)
+                },
+                "double" = {
+                    x <- (as.data.frame(xml2::xml_double(x)))
+                    colnames(x) <- node
+                    return(x)
+                },
+                "integer" = {
+                    x <- (as.data.frame(xml2::xml_integer(x)))
+                    colnames(x) <- node
+                    return(x)
+                }
+            )
+        },
         "xml" = return(x),
         "list" = return(xml2::as_list(x)),
         "structure" = {
@@ -2864,7 +3032,4 @@ ometif_metadata <- function(
         }
     )
 }
-
-
-
 

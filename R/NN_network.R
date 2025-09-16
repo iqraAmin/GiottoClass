@@ -16,8 +16,9 @@ NULL
 #' @param method method used to create the type of network requested.
 #' One of "dbscan" for sNN and kNN or "geometry", "RTriangle", or "deldir"
 #' for delaunay.
-#' @param node_ids character. Node ID values to assign. If NULL, integer indices
-#' will be used as node IDs.
+#' @param node_ids character. Node ID values to assign. If NULL, rownames of
+#' input matrix will be used. If no rownames, integer indices will be used as
+#' node IDs.
 #' @param include_weight logical. include edge weight attribute in output
 #' @param include_distance logical. include edge distance attribute in output
 #' @param as.igraph logical. Whether to return as `igraph`. Otherwise returns
@@ -141,17 +142,39 @@ createNetwork <- function(
     # NSE vars
     from <- to <- NULL
 
+    if (length(x) == 0L) {
+        stop(wrap_txt(errWidth = TRUE,
+            "[createNetwork] empty matrix provided.
+            No network can be generated"
+        ))
+    }
+
     # check params
     type <- match.arg(type, choices = c("sNN", "kNN", "delaunay"))
+
+    mdef <- c("dbscan", "geometry", "RTriangle", "deldir")
+    if (type %in% c("sNN", "kNN")) {
+        mchoices <- c("dbscan")
+        if (identical(method, mdef)) method <- mchoices
+    }
+    if (type %in% c("delaunay")) {
+        mchoices <- c("geometry", "RTriangle", "deldir")
+        if (identical(method, mdef)) method <- mchoices
+    }
+
     method <- switch(type,
-        "sNN" = match.arg(method, choices = c("dbscan"), several.ok = TRUE),
-        "kNN" = match.arg(method, choices = c("dbscan"), several.ok = TRUE),
-        "delaunay" = match.arg(
-            method,
-            choices = c("geometry", "RTriangle", "deldir"),
-            several.ok = TRUE
-        )
+        "sNN" = match.arg(method, choices = mchoices, several.ok = TRUE),
+        "kNN" = match.arg(method, choices = mchoices, several.ok = TRUE),
+        "delaunay" = {
+            method <- method[[1L]]
+            match.arg(method, choices = mchoices, several.ok = TRUE)
+        }
     )
+
+    vmsg(.is_debug = TRUE, sprintf(
+        "network\n type: %s\n method: %s",
+        type, method
+    ))
 
     # get common params
     alist <- list(
@@ -174,6 +197,11 @@ createNetwork <- function(
             args = alist
         )$delaunay_network_DT
     )
+
+    # default node_ids are input matrix rownames
+    if (is.null(node_ids) && !is.null(rownames(x))) {
+        node_ids <- rownames(x)
+    }
 
     # replace indices with node_ids if desired
     if (!is.null(node_ids)) {
@@ -226,7 +254,7 @@ createNetwork <- function(
     if (k >= nrow(x)) {
         k <- (nrow(x) - 1L)
         vmsg(.v = verbose, "k is higher than total number of cells.
-         Adjusted to (total number of cells - 1)")
+        Adjusted to (total number of cells - 1)")
     }
     # distances must be calculated when a limit is set
     if (!is.null(maximum_distance)) include_distance <- TRUE
@@ -285,7 +313,7 @@ createNetwork <- function(
     if (k >= nrow(x)) {
         k <- (nrow(x) - 1L)
         vmsg(.v = verbose, "k is higher than total number of cells.
-         Adjusted to (total number of cells - 1)")
+        Adjusted to (total number of cells - 1)")
     }
 
     nn_network <- dbscan::kNN(x = x, k = k, sort = TRUE, ...)
@@ -335,7 +363,7 @@ createNetwork <- function(
     )
 
     geometry_obj <- list("delaunay_simplex_mat" = delaunay_simplex_mat)
-    edge_combs <- utils::combn(x = ncol(delaunay_simplex_mat), m = 2L)
+    edge_combs <- combn(x = ncol(delaunay_simplex_mat), m = 2L)
     delaunay_edges <- data.table::as.data.table(apply(
         edge_combs,
         MARGIN = 1L, function(comb) delaunay_simplex_mat[, comb]
@@ -429,7 +457,7 @@ createNetwork <- function(
 
     if (ncol(x) > 2L) {
         .gstop("\'deldir\' delaunay method only applies to 2D data.
-           use method \'geometry\' or \'RTriangle\' instead")
+            use method \'geometry\' or \'RTriangle\' instead")
     }
 
     deldir_obj <- deldir::deldir(x = x, ...)
@@ -601,12 +629,12 @@ edge_distances <- function(x, y, x_node_ids = NULL) {
 #'   * **weight:** \eqn{1/(1 + distance)}
 #'   * **shared:** number of shared neighbours
 #'   * **rank:** ranking of pairwise cell neighbours
-#' 
+#'
 #' For sNN networks two additional parameters can be set:
 #'   * **minimum_shared:** minimum number of shared neighbours needed
 #'   * **top_shared:** keep this number of the top shared neighbours,
 #'   irrespective of minimum_shared setting
-#' 
+#'
 #' @examples
 #' g <- GiottoData::loadGiottoMini("visium")
 #'
@@ -733,7 +761,7 @@ createNearestNetwork <- function(
     if (k >= nrow(matrix_to_use)) {
         k <- (nrow(matrix_to_use) - 1)
         vmsg(.v = verbose, "k is higher than total number of cells.
-         Adjusted to (total number of cells - 1)")
+        Adjusted to (total number of cells - 1)")
     }
 
     nn_network <- dbscan::kNN(x = matrix_to_use, k = k, sort = TRUE, ...)
@@ -809,8 +837,10 @@ createNearestNetwork <- function(
         nn_names <- names(gobject@nn_network[[spat_unit]][[type]])
 
         if (name %in% nn_names) {
-            vmsg(.v = verbose, 
-                 name, "has already been used, will be overwritten")
+            vmsg(
+                .v = verbose,
+                name, "has already been used, will be overwritten"
+            )
         }
 
         nnObj <- create_nn_net_obj(

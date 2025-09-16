@@ -3,14 +3,18 @@
 \name{subset_dollar}
 \alias{subset_dollar}
 \alias{`$`}
+\alias{$,giotto-method}
 \alias{$,coordDataDT-method}
 \alias{$,spatEnrObj-method}
 \alias{$,dimObj-method}
 \alias{$,metaData-method}
 \alias{$,terraVectData-method}
 \alias{$,affine2d-method}
+\alias{$,processParam-method}
 \title{Subset part of an object with \code{$}}
 \usage{
+\S4method{$}{giotto}(x, name)
+
 \S4method{$}{coordDataDT}(x, name)
 
 \S4method{$}{spatEnrObj}(x, name)
@@ -22,6 +26,8 @@
 \S4method{$}{terraVectData}(x, name)
 
 \S4method{$}{affine2d}(x, name)
+
+\S4method{$}{processParam}(x, name)
 }
 \arguments{
 \item{x}{Giotto S4 object to extract columns from}
@@ -35,6 +41,11 @@ vector of values from a requested column
 \description{
 Subset values from a Giotto Class using \code{$} operator.
 }
+\section{Functions}{
+\itemize{
+\item \code{$}: Subset giotto object
+
+}}
 \section{\code{`$`} methods}{
 
 
@@ -55,6 +66,9 @@ Select by colname from giotto S4 spatVector slot.
 
 
 Select piecewise transform values from \code{affine2d}
+
+
+Select param from \code{processParam} inheriting objects
 }
 
 \examples{

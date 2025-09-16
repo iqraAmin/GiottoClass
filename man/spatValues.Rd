@@ -2,37 +2,66 @@
 % Please edit documentation in R/slot_accessors.R
 \name{spatValues}
 \alias{spatValues}
+\alias{svkey}
 \title{Giotto object spatial values}
 \usage{
 spatValues(
   gobject,
+  feats,
   spat_unit = NULL,
   feat_type = NULL,
-  feats,
   expression_values = NULL,
+  spat_loc_name = NULL,
   spat_enr_name = NULL,
   poly_info = NULL,
+  dim_reduction_to_use = NULL,
+  dim_reduction_name = NULL,
+  svkey = NULL,
   verbose = NULL,
   debug = FALSE
+)
+
+svkey(
+  feats,
+  spat_unit = NULL,
+  feat_type = NULL,
+  expression_values = NULL,
+  spat_loc_name = NULL,
+  poly_info = NULL,
+  dim_reduction_to_use = NULL,
+  dim_reduction_name = NULL,
+  verbose = NULL
 )
 }
 \arguments{
 \item{gobject}{\code{giotto} object}
 
+\item{feats}{character vector. One or more features or values to find within
+the giotto object}
+
 \item{spat_unit}{character. spatial unit to check}
 
 \item{feat_type}{character. feature type to check}
 
-\item{feats}{character vector. One or more features or values to find within
-the giotto object}
-
 \item{expression_values}{character. (optional) Name of expression information
 to use}
+
+\item{spat_loc_name}{character. (optional) Name of spatial locations
+information to use}
 
 \item{spat_enr_name}{character. (optional) Name of spatial enrichments to
 use}
 
 \item{poly_info}{character. (optional) Name of polygons to use}
+
+\item{dim_reduction_to_use}{character. (optional) Which type of dimension
+reduction to use}
+
+\item{dim_reduction_name}{character. (optional) Name of dimension reduction
+to use}
+
+\item{svkey}{use a \code{svkey}. Other params will be ignored. This is just
+syntactic sugar for \code{svkey@get(gobject)}}
 
 \item{verbose}{verbosity}
 
@@ -43,7 +72,6 @@ A data.table with a cell_ID column and whichever feats were
 requested
 }
 \description{
-\ifelse{html}{\href{https://lifecycle.r-lib.org/articles/stages.html#experimental}{\figure{lifecycle-experimental.svg}{options: alt='[Experimental]'}}}{\strong{[Experimental]}}\cr
 Retrieve specific values from the \code{giotto} object for a specific \code{spat_unit}
 and \code{feat_type}. Values are returned as a data.table with the features
 requested and a \code{cell_ID} column. This function may be updated in the future
@@ -55,13 +83,15 @@ slot it checks, see details.
 spatValues searches through the set of available information within the
 \code{giotto} object for matches to \code{feats}. The current search order is
 \enumerate{
-\item cell expression
+\item{cell expression}
 \item{cell metadata}
+\item{spatial locations}
 \item{spatial enrichment}
+\item{dimension reduction}
 \item{polygon info}
 }
 If a specific name for one of the types of information is provided via a
-param such as \code{expression_values}, \code{spat_enr_name}, \code{poly_info}, then
+param such as \code{expression_values}, \code{spat_enr_name}, etc, then
 the search will only be performed on that type of data.\cr\cr
 \strong{[debug]}\cr
 This function uses Giotto's accessor functions which can usually throw errors
@@ -71,6 +101,13 @@ data was not found when all getters fail. By setting \code{debug = TRUE}, you ca
 see the errors returned from each failed getter printed as messages for
 easier debugging.
 }
+\section{Functions}{
+\itemize{
+\item \code{svkey()}: Create a \code{svkey} defining a \code{spatValues()} call
+for deferred use. Handy for contexts where the full \code{giotto} object is not
+available.
+
+}}
 \examples{
 g <- GiottoData::loadGiottoMini("vizgen")
 

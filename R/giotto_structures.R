@@ -13,6 +13,7 @@
 #' @returns giottoPolygon
 .do_gpoly <- function(x, what, args = NULL) {
     x@spatVector <- do.call(what, args = append(list(x@spatVector), args))
+    if (!is.null(args$geomtype)) args$geomtype <- "points"
     if (!is.null(x@spatVectorCentroids)) {
         x@spatVectorCentroids <- do.call(
             what,
@@ -168,7 +169,9 @@
 
 # from a spatvector, get the centroid xy values as a numeric vector
 .get_centroid_xy <- function(x) {
-    res <- centroids(x) %>% ext() %>% .ext_to_num_vec()
+    res <- centroids(x) %>%
+        ext() %>%
+        .ext_to_num_vec()
     res[c(1L, 3L)]
 }
 
@@ -185,7 +188,7 @@
 .magick_image_corners <- function(x) {
     checkmate::assert_class(x, "magick-image")
     im_info <- magick::image_info(x)
-    
+
     # generate spatLocsObj as a set of control points for magick distort. #
     # ------------------------------------------------------------------- #
     # - magick uses 0.5 to refer to the center of pixels
@@ -212,6 +215,7 @@
 #' which polygons should now be combined under which group_ID
 #' @param name (optional) name for the giottoPolygon object
 #' @description
+#' **SUPERCEDED**. Use [combineGeom()] instead.\cr\cr
 #' Combine multiple giottoPolygon geometries into a set of multipolygons. Note
 #' that attributes cannot be kept
 #' @returns giottoPolygon
@@ -282,11 +286,158 @@ combineToMultiPolygon <- function(x, groups, name = NULL) {
 }
 
 
+#' @name combine_split_geoms
+#' @title Combine or Split Complex Geometries
+#' @aliases splitGeom combineGeom
+#' @description
+#' Geometries can be either single/simple or multi with multiple closed rings
+#' defined as a single record. `combineGeom()` is used to combine polygons.
+#' `splitGeom()` breaks combined geometries down into constituent parts.\cr
+#' Avoid using the `SpatVector` methods. They are lower-level and does not
+#' deal with IDs like might be expected by Giotto.
+#'
+#' # Geometry Attributes Handling
+#' * `combineGeom()` attributes are only kept if `by` param is used. For
+#' conflicts where more than one value is present for a single variable after
+#' combining, they are resolved using `fun` param.
+#' When `by=NULL`, all attributes are dropped and a default `poly_ID` column
+#' is generated based on the `fmt` param.
+#' * `splitGeom()` attributes are duplicated for each part that was part of the
+#' same multipolygon. The `poly_ID` column will be made unique.
+#' * overlaps and centroids information will be dropped after either operation.
+#'
+#' @details
+#' Currently, these are simple wrappers around terra's
+#' `aggregate(dissolve = FALSE)` and `disagg()` with some additional handling
+#' around the `poly_ID` column and a different name to avoid confusion with
+#' spatial feature aggregation.
+#' @param x geometry class to combine or split.
+#' @param by character. Column name of variable used to group the geometries.
+#' Will be used as the new `poly_ID` column. All geometries will be combined
+#' if not provided.
+#' @inheritParams terra::aggregate
+#' @param fmt character. sprintf formatting to use to generate `poly_ID` column
+#' values if no attributes are retained after combining.
+#' @param previous_id character. If not `NULL`, column name to store original
+#' poly_ID values under. Note that merged IDs will be `NA`.
+#' @param ... additional params to pass to [terra::aggregate()] (and then to
+#' `fun`, such as `na.rm=TRUE`) or [terra::disagg()]
+#' @returns the same class as `x`
+#' @examples
+#' dt <- data.table::data.table(
+#'     id = c(
+#'         rep('a', 3), # Triangle (id 'a')
+#'         rep('b', 4), # Square 1 (id 'b')
+#'         rep('c', 4), # Square 2 (id 'c')
+#'         rep('d', 4) # Square 3 (id 'd')
+#'     ),
+#'     x = c(
+#'         0, 1, 0.5,
+#'         2, 5, 5, 2,
+#'         5, 5, 6, 6,
+#'         6, 7, 7, 6
+#'     ),
+#'     y = c(
+#'         0, 0, 1,
+#'         2, 2, 5, 5,
+#'         2, 3, 3, 2,
+#'         5, 5, 6, 6
+#'     )
+#' )
+#' plot_colors <- getRainbowColors(4)
+#' gpoly <- createGiottoPolygon(dt, verbose = FALSE)
+#' plot(gpoly, col = plot_colors)
+#'
+#' gpoly$group_id <- sprintf("group_%d", c(1, 2, 2, 3))
+#' gpoly$values <- 1:4
+#' force(gpoly)
+#'
+#' c_all <- combineGeom(gpoly) # combine all
+#' force(c_all)
+#' plot(c_all, col = plot_colors)
+#'
+#' c_gid <- combineGeom(gpoly, by = "group_id")
+#' force(c_gid)
+#' plot(c_gid, col = plot_colors)
+#' # `dissolve` removes touching boundaries
+#' plot(combineGeom(gpoly, by = "group_id", dissolve = TRUE),
+#'      col = plot_colors)
+#'
+#' # split combined geometries
+#' s_cgid <- splitGeom(c_gid)
+#' force(s_cgid)
+#' plot(s_cgid, col = plot_colors)
+NULL
+
+#' @rdname combine_split_geoms
+#' @export
+setMethod("combineGeom", signature(x = "giottoPolygon"),
+    function(x,
+        by = NULL, dissolve = FALSE, fun = "mean", ...,
+        fmt = "poly_%d", previous_id = "source_id") {
+    # rename cols
+    if (!is.null(by)) {
+        if (!by %in% names(x[])) {
+            stop("[combineGeom] 'by' must be an existing column\n",
+                call. = FALSE)
+        }
+
+        # handle original names
+        pid_idx_old <- which(names(x[]) == "poly_ID")
+        if (is.null(previous_id)) {
+            x$poly_ID <- NULL
+        } else {
+            names(x[])[pid_idx_old] <- previous_id
+        }
+        # handle new names (by)
+        pid_idx_new <- which(names(x[]) == by)
+        names(x[])[pid_idx_new] <- "poly_ID"
+        by <- "poly_ID"
+    }
+    res <- combineGeom(x[], by = by, dissolve = dissolve, fun = fun, ...)
+    if (ncol(res) == 0) { # if no attributes, add a poly_ID col based on `fmt`
+        res$poly_ID <- sprintf(fmt, seq_len(nrow(res)))
+    }
+    x[] <- res
+    # ensure character poly_ID
+    if (!is.character(x[1]$poly_ID)) x$poly_ID <- sprintf(fmt, x$poly_ID)
+    # update unique names
+    x@unique_ID_cache <- unique(x$poly_ID)
+    # drop overlaps
+    x@overlaps <- NULL
+    # drop centroids
+    x@spatVectorCentroids <- NULL
+    x
+})
+#' @rdname combine_split_geoms
+#' @export
+setMethod("splitGeom", signature("giottoPolygon"),
+    function(x, fmt = "poly_%d", previous_id = "source_id", ...) {
+    if (!is.null(previous_id)) {
+        x[][[previous_id]] <- x$poly_ID
+    }
+    x[] <- splitGeom(x[], ...)
+    # make duplicate names unique
+    x$poly_ID <- sprintf(fmt, seq_len(nrow(x)))
+    # update unique names
+    x@unique_ID_cache <- unique(x$poly_ID)
+    # drop overlaps
+    x@overlaps <- NULL
+    # drop centroids
+    x@spatVectorCentroids <- NULL
+    x
+})
 
 
-
-
-
+#' @describeIn combine_split_geoms Avoid using.
+setMethod("combineGeom", signature(x = "SpatVector"),
+        function(x, by = NULL, dissolve = FALSE, fun = "mean", ...) {
+            terra::aggregate(x, by = by, dissolve = dissolve, fun = fun, ...)
+        })
+#' @describeIn combine_split_geoms Avoid using.
+setMethod("splitGeom", signature(x = "SpatVector"), function(x, ...) {
+    terra::disagg(x, ...)
+})
 
 
 
@@ -450,7 +601,7 @@ smoothGiottoPolygons <- function(gpolygon,
         x_colname = NULL,
         y_colname = NULL,
         feat_ID_colname = NULL,
-        verbose = TRUE) {
+        verbose = NULL) {
     x <- data.table::as.data.table(x)
 
     # MANUAL OPTION
@@ -479,8 +630,13 @@ smoothGiottoPolygons <- function(gpolygon,
 
         # data.frame like object needs to have 2 coordinate columns and
         # at least one other column as the feat_ID
-        if (ncol(x) < 3) stop("At minimum, columns for xy coordinates and
-                            feature ID are needed.\n")
+        if (ncol(x) < 3) {
+            stop(wrap_txtf(errWidth = TRUE,
+                "[createGiottoPoints] ncol = %d, but at least 3 expected.
+                At minimum, columns for xy coordinates and feature ID are %s",
+                ncol(x), " needed.\n"
+            ), call. = FALSE)
+        }
         col_classes <- vapply(x, class, FUN.VALUE = character(1L))
         ## find feat_ID as either first character col or named column
         ## if not detected, select 3rd column
@@ -522,27 +678,26 @@ smoothGiottoPolygons <- function(gpolygon,
     }
 
     ## message and force data type
-    if (isTRUE(verbose)) {
-        message(paste0(
-            '  Selecting col "',
-            colnames(x[, feat_ID_col, with = FALSE]),
-            '" as feat_ID column'
-        ))
-    }
+    vmsg(
+        .v = verbose, .initial = "  ",
+        sprintf(
+            "Selecting col \"%s\" as feat_ID column",
+            colnames(x[, feat_ID_col, with = FALSE])
+        )
+    )
     colnames(x)[feat_ID_col] <- "feat_ID"
     if (!inherits(x$feat_ID, "character")) {
         x$feat_ID <- as.character(x$feat_ID) # ensure char
     }
 
-
-    if (isTRUE(verbose)) {
-        message(paste0(
-            '  Selecting cols "',
-            colnames(x[, x_col, with = FALSE]), '" and "',
-            colnames(x[, y_col, with = FALSE]),
-            '" as x and y respectively'
-        ))
-    }
+    vmsg(
+        .v = verbose, .initial = "  ",
+        sprintf(
+            "Selecting cols \"%s\" and \"%s\" as x and y respectively",
+            colnames(x[, x_col, with = FALSE]),
+            colnames(x[, y_col, with = FALSE])
+        )
+    )
     colnames(x)[x_col] <- "x"
     colnames(x)[y_col] <- "y"
     if (!inherits(x$x, "numeric")) x$x <- as.numeric(x$x) # ensure numeric

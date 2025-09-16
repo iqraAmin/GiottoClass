@@ -2,6 +2,7 @@
 % Please edit documentation in R/methods-IDs.R
 \name{spatIDs-generic}
 \alias{spatIDs-generic}
+\alias{spatIDs<-}
 \alias{spatIDs}
 \alias{featIDs}
 \alias{spatIDs,giotto-method}
@@ -11,6 +12,7 @@
 \alias{spatIDs,spatialNetworkObj-method}
 \alias{spatIDs,dimObj-method}
 \alias{spatIDs,giottoPolygon-method}
+\alias{spatIDs<-,giottoPolygon-method}
 \alias{spatIDs,spatEnrObj-method}
 \alias{spatIDs,nnNetObj-method}
 \alias{featIDs,giotto-method}
@@ -20,7 +22,7 @@
 \alias{featIDs,spatEnrObj-method}
 \title{Spatial and feature IDs}
 \usage{
-\S4method{spatIDs}{giotto}(x, spat_unit = NULL, ...)
+\S4method{spatIDs}{giotto}(x, spat_unit = NULL, subset, negate = FALSE, quote = TRUE, ...)
 
 \S4method{spatIDs}{exprObj}(x, ...)
 
@@ -34,11 +36,13 @@
 
 \S4method{spatIDs}{giottoPolygon}(x, use_cache = TRUE, uniques = TRUE, ...)
 
+\S4method{spatIDs}{giottoPolygon}(x, old = NULL, ...) <- value
+
 \S4method{spatIDs}{spatEnrObj}(x, ...)
 
 \S4method{spatIDs}{nnNetObj}(x, ...)
 
-\S4method{featIDs}{giotto}(x, feat_type = NULL, ...)
+\S4method{featIDs}{giotto}(x, feat_type = NULL, subset, negate = FALSE, quote = TRUE, ...)
 
 \S4method{featIDs}{exprObj}(x, ...)
 
@@ -53,21 +57,37 @@
 
 \item{spat_unit}{(optional) specify which spatial unit}
 
-\item{...}{additional parameters to pass}
+\item{subset}{logical expression to find a subset of features.}
+
+\item{negate}{logical. if \code{TRUE} all IDs that are \strong{not} in the \code{subset}
+are selected}
+
+\item{quote}{logical. If \code{TRUE}, the \code{subset} param will be quoted with
+\code{substitute()}. Set this to \code{FALSE} when calling from a function, although
+that may not be recommended since NSE output can be unexpected when not used
+interactively.}
+
+\item{\dots}{additional params to pass when used with the \code{subset} param.
+For \code{spatID()}, these pass to \code{\link[=spatValues]{spatValues()}}. For \code{featID()}, these
+currently only pass to \code{fDataDT()}.}
 
 \item{use_cache}{use cached IDs if available (gpoly and gpoints only)}
 
 \item{uniques}{return unique ID values
 only (currently gpoly and gpoints only)}
 
+\item{old}{character. IDs to match against to replace}
+
+\item{value}{character. IDs to replace with}
+
 \item{feat_type}{(optional) specify which feature type}
 }
 \value{
-spatIDs and featIDs
+character vector of cell/spatial IDs or feature IDs
 }
 \description{
-Get the cell
-IDs (termed spatial IDs to better reflect when not at the single-cell level)
+Get the cell/spot IDs
+(termed spatial IDs to better reflect when not at the single-cell level)
 and feature IDs of a giotto object or subobject.
 
 [\strong{\code{giotto} object specific}]
@@ -85,7 +105,23 @@ expected IDs within all \code{giotto} slots, and not always the exact set or
 ordering.
 }
 \examples{
-g <- GiottoData::loadSubObjectMini("giottoPoints")
+g <- GiottoData::loadGiottoMini("visium")
+spatIDs(g)
+spatIDs(g, subset = nr_feats <= 200)
+spatIDs(g, subset = Dim.1 > 25, dim_reduction_to_use = "umap")
 
 featIDs(g)
+featIDs(g, subset = nr_cells < 100)
+
+gpoints <- GiottoData::loadSubObjectMini("giottoPoints")
+featIDs(gpoints)
+
+# ID replacements (currently only giottoPolygons)
+polys <- g[["spatial_info"]][[1]]
+slot(polys, "overlaps") <- NULL # make NULL to avoid a warning
+head(spatIDs(polys))
+spatIDs(polys) <- paste0("poly_", seq_len(nrow(polys)))
+head(spatIDs(polys))
+spatIDs(polys, old = c("poly_1", "poly_3")) <- c("test1", "test2")
+head(spatIDs(polys))
 }

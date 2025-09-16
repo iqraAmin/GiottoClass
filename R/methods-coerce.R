@@ -7,6 +7,10 @@ NULL
 #' @name as.data.table
 #' @description Coerce to data.table if possible
 #' @param x The object to coerce
+#' @param geomtype character (optional). One of "points" or "polygons".
+#' Fallback geomtype used when it is not possible for \{terra\} to determine
+#' the type of geometry an object is.
+#' (commonly seen when nrow of the object = 0)
 #' @param keep.rownames This argument is ignored
 #' @param geom character or NULL. If not NULL, either "XY", "WKT", or "HEX", to
 #' get the geometry included in coordinates of each point or vertex,
@@ -87,14 +91,40 @@ NULL
 #' @method as.data.table SpatVector
 #' @export
 as.data.table.SpatVector <- function(
-        x, keep.rownames = FALSE, geom = NULL,
-        include_values = TRUE, ...) {
-    # if looking for polygon XY...
-    if (terra::is.polygons(x)) {
-        if (!is.null(geom)) {
-            if (geom == "XY") {
-                return(.spatvector_to_dt(x, include_values = include_values))
+        x, keep.rownames = FALSE, geom = NULL, include_values = TRUE, geomtype, ...) {
+    if (isTRUE(toupper(geom) == "XY")) {
+        # permit passing of geomtype if needed
+        if (terra::geomtype(x) != "none") {
+            geomtype <- terra::geomtype(x)
+        } else {
+            geomtype <- match.arg(geomtype, c("points", "polygons"))
+        }
+
+        # DF conversion with "XY" not supported by {terra} with nrow 0
+        if (nrow(x) == 0L) {
+            base <- terra::as.data.frame(x[]) |> data.table::setDT()
+            if (geomtype == "polygons") {
+                geom_cols <- data.table::data.table(
+                    geom = integer(),
+                    part = integer(),
+                    x = numeric(),
+                    y = numeric(),
+                    hole = integer()
+                )
+                return(cbind(geom_cols, base))
             }
+            if (geomtype == "points") {
+                geom_cols <- data.table::data.table(
+                    x = numeric(),
+                    y = numeric()
+                )
+                return(cbind(base, geom_cols))
+            }
+        }
+
+        # if looking for polygon XY and nrow > 0...
+        if (geomtype == "polygons") {
+            return(.spatvector_to_dt(x, include_values = include_values))
         }
     }
     # all other conditions: pass to terra then set as DT
@@ -107,14 +137,14 @@ as.data.table.SpatVector <- function(
 #' @method as.data.table giottoPolygon
 #' @export
 as.data.table.giottoPolygon <- function(x, ...) {
-    as.data.table(x[], ...)
+    as.data.table(x[], geomtype = "polygons", ...)
 }
 
 #' @rdname as.data.table
 #' @method as.data.table giottoPoints
 #' @export
 as.data.table.giottoPoints <- function(x, ...) {
-    as.data.table(x[], ...)
+    as.data.table(x[], geomtype = "points", ...)
 }
 
 
@@ -125,16 +155,14 @@ as.data.table.giottoPoints <- function(x, ...) {
 
 #' @rdname as.matrix
 #' @export
-setMethod("as.matrix", signature("spatLocsObj"), function(
-        x, id_rownames = TRUE, ...) {
-
+setMethod("as.matrix", signature("spatLocsObj"), function(x, id_rownames = TRUE, ...) {
     x <- x[] # drop to DT
     spat_cols <- c("sdimx", "sdimy", "sdimz")
     spat_cols <- spat_cols %in% colnames(x)
-    
+
     m <- x[, spat_cols, with = FALSE] %>%
         as.matrix()
-    
+
     if (id_rownames) {
         rownames(m) <- x$cell_ID
     }
@@ -142,11 +170,21 @@ setMethod("as.matrix", signature("spatLocsObj"), function(
 })
 
 
+#' @rdname as.matrix
+#' @param attr Either NULL or `character` providing the name of an edge
+#' attribute to include in the ajacency matrix. The edge attribute to use must
+#' be either `logical` or `numeric`.
+#' @export
+setMethod("as.matrix", signature("nnNetObj"), function(x, attr = NULL, ...) {
+    checkmate::assert_character(attr, null.ok = TRUE)
+    igraph::as_adjacency_matrix(x[], attr = attr, sparse = TRUE, ...)
+})
 
 
 # image types ####
 
 methods::setAs("giottoLargeImage", "giottoImage", function(from) {
+    package_check("magick")
     mgobj <- .spatraster_sample_values(
         raster_object = from,
         size = getOption("giotto.plot_img_max_crop", 1e8),
@@ -175,14 +213,15 @@ methods::setAs("giottoLargeImage", "giottoImage", function(from) {
 })
 
 methods::setAs("giottoLargeImage", "giottoAffineImage", function(from) {
+    package_check("magick")
     attr(from, "affine") <- new("affine2d")
     attr(from, "funs") <- list()
     attr(from, "class") <- "giottoAffineImage"
-    
+
     initialize(from)
 })
 
-# TODO redo this as `as.array`. 
+# TODO redo this as `as.array`.
 # Careful: There are already usages of this `as()` method in the code
 methods::setAs("giottoLargeImage", "array", function(from) {
     .spatraster_sample_values(
@@ -241,7 +280,11 @@ setMethod(
     }
 )
 
-
+#' @rdname as.points
+#' @export
+setMethod("as.points", signature("spatLocsObj"), function(x) {
+    vect(x[], geom = c("sdimx", "sdimy"))
+})
 
 
 
@@ -613,10 +656,15 @@ setMethod(
 
         attr_values <- unique(dt[, other_values, with = FALSE])
         if (nrow(attr_values) > 0L &&
-            nrow(attr_values) != max(dt[, max(geom)])) {
-            warning(wrap_txt(".dt_to_spatvector_polygon:
-                            Number of attributes does not match number of
-                            polygons to create. Attributes are ignored."), call. = FALSE)
+            nrow(attr_values) != dt[, max(geom)]) {
+            warning(wrap_txt(
+                ".dt_to_spatvector_polygon:
+                Number of attributes does not match number of
+                polygons to create. Attributes are ignored."
+            ), call. = FALSE)
+
+            # fallback to poly_ID only
+            attr_values <- unique(attr_values[, "poly_ID"])
         }
     }
 

@@ -2,7 +2,8 @@
 % Please edit documentation in R/methods-extract.R
 \name{subset_bracket}
 \alias{subset_bracket}
-\alias{`[`}
+\alias{`[`,}
+\alias{`[[`}
 \alias{[,gdtData,gIndex,gIndex,missing-method}
 \alias{[,gdtData,logical,missing,missing-method}
 \alias{[,gdtData,character,missing,missing-method}
@@ -39,8 +40,12 @@
 \alias{[,giottoPolygon,character,missing,missing-method}
 \alias{[,giottoPolygon,missing,gIndex,missing-method}
 \alias{[,terraVectData,gIndex,gIndex,missing-method}
+\alias{[,giottoLargeImage,missing,missing,missing-method}
+\alias{[[,giottoLargeImage,gIndex,missing-method}
+\alias{[,giottoImage,missing,missing,missing-method}
 \alias{[,affine2d,missing,missing,missing-method}
-\title{Subset part of an object with \code{[}}
+\alias{[,processParam,missing,missing,missing-method}
+\title{Subset part of an object with \code{[} or \code{[[}}
 \usage{
 \S4method{[}{gdtData,gIndex,gIndex,missing}(x, i, j)
 
@@ -116,13 +121,23 @@
 
 \S4method{[}{terraVectData,gIndex,gIndex,missing}(x, i, j)
 
+\S4method{[}{giottoLargeImage,missing,missing,missing}(x, i, j)
+
+\S4method{[[}{giottoLargeImage,gIndex,missing}(x, i, j, ...)
+
+\S4method{[}{giottoImage,missing,missing,missing}(x, i, j)
+
 \S4method{[}{affine2d,missing,missing,missing}(x, i, j)
+
+\S4method{[}{processParam,missing,missing,missing}(x, i, j)
 }
 \arguments{
 \item{x}{Giotto S4 object to subset information from}
 
 \item{i, j}{indices specifying elements to extract. Indices are numeric or
 character vectors, or empty}
+
+\item{\dots}{additional arguments}
 }
 \value{
 Same as \code{x} unless brackets are empty in which case, the main

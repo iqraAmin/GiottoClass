@@ -3,7 +3,7 @@
 
 #' @rdname giotto_instructions
 #' @param python_path path to python binary to use or directory one level
-#' up from the `env` directory (similar to output of 
+#' up from the `env` directory (similar to output of
 #' `reticulate::miniconda_path()`)
 #' @param show_plot print plot to console, default = TRUE
 #' @param return_plot return plot as object, default = TRUE
@@ -21,8 +21,7 @@
 #' @param no_python_warn turn off warning that no compatible python env has
 #' been detected
 #' @export
-createGiottoInstructions <- function(
-    python_path = getOption("giotto.py_path"),
+createGiottoInstructions <- function(python_path = getOption("giotto.py_path"),
     show_plot = NULL,
     return_plot = NULL,
     save_plot = NULL,
@@ -49,11 +48,16 @@ createGiottoInstructions <- function(
         silent = TRUE
     )
 
-    if ((is.null(python_path) || inherits(python_path, "try-error")) &
-        !no_python_warn) {
-        warning(wrap_txt("Python is required for full Giotto functionality."),
-                call. = FALSE)
+    if ((is.null(python_path) || inherits(python_path, "try-error")) &&
+        (!no_python_warn && !getOption("giotto.no_python_warn", FALSE))) {
+        warning(wrap_txt(
+            "Python is required for full Giotto functionality.
+            Turn off this message by setting option
+            \"giotto.no_python_warn\" = TRUE"),
+            call. = FALSE
+        )
         options("giotto.has_conda" = FALSE)
+        options("giotto.no_python_warn" = TRUE)
     }
 
     # print plot to console
@@ -193,13 +197,12 @@ create_giotto_instructions <- function(python_path = NULL,
 readGiottoInstructions <- function(giotto_instructions,
     param = NULL,
     default) {
-    
     deprecate_soft(
         when = "0.3.5",
         what = "readGiottoInstructions()",
         with = "instructions()"
     )
-    
+
     # get instructions if provided the giotto object
     if (inherits(giotto_instructions, "giotto")) {
         giotto_instructions <- giotto_instructions@instructions
@@ -232,13 +235,12 @@ readGiottoInstructions <- function(giotto_instructions,
 #' @export
 #' @keywords internal
 showGiottoInstructions <- function(gobject) {
-    
     deprecate_soft(
         when = "0.3.5",
         what = "showGiottoInstructions()",
         with = "instructions()"
     )
-    
+
     instrs <- gobject@instructions
     return(instrs)
 }
@@ -269,14 +271,13 @@ changeGiottoInstructions <- function(gobject,
     new_values = NULL,
     return_gobject = TRUE,
     init_gobject = TRUE) {
-    
     deprecate_soft(
         when = "0.3.5",
         what = "changeGiottoInstructions()",
         with = "instructions()"
     )
-    
-    
+
+
     instrs <- gobject@instructions
 
     if (is.null(params) | is.null(new_values)) {
@@ -345,13 +346,12 @@ changeGiottoInstructions <- function(gobject,
 replaceGiottoInstructions <- function(gobject,
     instructions = NULL,
     init_gobject = TRUE) {
-    
     deprecate_soft(
         when = "0.3.5",
         what = "replaceGiottoInstructions()",
         with = "instructions()"
     )
-    
+
     instrs_needed <- names(create_giotto_instructions())
 
     # validate new instructions
@@ -375,6 +375,3 @@ print.giottoInstructions <- function(x, ...) {
     cat(sprintf("<%s>\n", class(x)[1]))
     print_list(x)
 }
-
-
-

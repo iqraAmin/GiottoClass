@@ -3,13 +3,17 @@
 \name{replace_dollar}
 \alias{replace_dollar}
 \alias{`$<-`}
+\alias{$<-,giotto-method}
 \alias{$<-,coordDataDT-method}
 \alias{$<-,spatEnrObj-method}
 \alias{$<-,dimObj-method}
 \alias{$<-,metaData-method}
 \alias{$<-,terraVectData-method}
+\alias{$<-,processParam-method}
 \title{Replace part of an object with \verb{$<-}}
 \usage{
+\S4method{$}{giotto}(x, name) <- value
+
 \S4method{$}{coordDataDT}(x, name) <- value
 
 \S4method{$}{spatEnrObj}(x, name) <- value
@@ -19,6 +23,8 @@
 \S4method{$}{metaData}(x, name) <- value
 
 \S4method{$}{terraVectData}(x, name) <- value
+
+\S4method{$}{processParam}(x, name) <- value
 }
 \arguments{
 \item{x}{Giotto S4 object to replace columns from}
@@ -51,6 +57,9 @@ Works via data.table methods
 
 
 Set values by colname into giotto S4 spatVector slot.
+
+
+Set values by param name into \code{processParam} inheriting objects
 }
 
 \examples{

@@ -7,14 +7,336 @@ NULL
 
 
 
+
 # giotto ####
 # See documentation in classes.R
 #' @noRd
 #' @keywords internal
-setMethod("initialize", signature("giotto"), function(.Object, ...) {
+setMethod(
+    "initialize", signature("giotto"),
+    function(.Object, ..., initialize = TRUE) {
+        .Object <- methods::callNextMethod(.Object, ...)
+        handle_errors(
+            {
+                .init_gobject(.Object = .Object, ..., initialize = initialize)
+            },
+            prefix = "giotto initialize"
+        )
+    }
+)
+
+
+
+# Virtual Classes ####
+
+
+
+
+
+
+## metaData ####
+setMethod(
+    "initialize", "metaData",
+    function(.Object, ...) {
+        .Object <- methods::callNextMethod()
+        # prepare DT for set by reference
+        if (!is.null(.Object@metaDT)) {
+            .Object@metaDT <- data.table::setalloccol(.Object@metaDT)
+        }
+        .Object
+    }
+)
+
+
+
+## enrData ####
+setMethod(
+    "initialize", "enrData",
+    function(.Object, ...) {
+        .Object <- methods::callNextMethod()
+        # prepare DT for set by reference
+        if (!is.null(.Object@enrichDT)) {
+            .Object@enrichDT <- data.table::setalloccol(.Object@enrichDT)
+        }
+        .Object
+    }
+)
+
+
+
+
+
+## spatNetData ####
+setMethod(
+    "initialize", "spatNetData",
+    function(.Object, ...) {
+        .Object <- methods::callNextMethod()
+        # prepare DT for set by reference
+        if (!is.null(.Object@networkDT)) {
+            .Object@networkDT <- data.table::setalloccol(.Object@networkDT)
+        }
+        if (!is.null(.Object@networkDT_before_filter)) {
+            .Object@networkDT_before_filter <- data.table::setalloccol(
+                .Object@networkDT_before_filter
+            )
+        }
+        .Object
+    }
+)
+
+
+
+
+
+## coordDataDT ####
+setMethod(
+    "initialize", "coordDataDT",
+    function(.Object, ...) {
+        .Object <- methods::callNextMethod()
+        # prepare DT for set by reference
+        if (!is.null(.Object@coordinates)) {
+            .Object@coordinates <- data.table::setalloccol(.Object@coordinates)
+        }
+        .Object
+    }
+)
+
+
+
+
+
+
+## spatGridData ####
+setMethod(
+    "initialize", "spatGridData",
+    function(.Object, ...) {
+        .Object <- methods::callNextMethod()
+        # prepare DT for set by reference
+        if (!is.null(.Object@gridDT)) {
+            .Object@gridDT <- data.table::setalloccol(.Object@gridDT)
+        }
+        .Object
+    }
+)
+
+
+## affine2d ####
+setMethod("initialize", "affine2d", function(.Object, ...) {
     .Object <- methods::callNextMethod()
+    .Object@anchor <- ext(.Object@anchor) %>%
+        .ext_to_num_vec()
+
+    res <- .decomp_affine(.Object@affine)
+
+    .Object@affine <- res$affine
+    .Object@rotate <- res$rotate
+    .Object@shear <- res$shear
+    .Object@scale <- res$scale
+    .Object@translate <- res$translate
+
+    return(.Object)
+})
+
+## giottoLargeImage ####
+setMethod("initialize", signature("giottoLargeImage"), function(.Object, ...) {
+    .Object <- methods::callNextMethod()
+
+    # defaults
+    .Object@OS_platform <- .Object@OS_platform %null% .Platform[["OS.type"]]
+    objName(.Object) <- objName(.Object) %null% "image"
+
+    r <- .Object@raster_object
+    if (is.null(r)) {
+        return(.Object)
+    } # return early if NULL
+
+    # scale factor and res
+    .Object@resolution <- terra::res(r)
+    names(.Object@resolution) <- c("x", "y")
+    .Object@scale_factor <- 1 / .Object@resolution
+
+    # sample for image characteristics
+    svals <- .spatraster_sample_values(r, size = 5000, verbose = FALSE)
+
+    if (nrow(svals) != 0) {
+        intensity_range <- .spatraster_intensity_range(
+            raster_object = r,
+            sample_values = svals
+        )
+    }
+    .Object@min_intensity <- intensity_range[["min"]]
+    .Object@max_intensity <- intensity_range[["max"]]
+
+    # find out if image is int or floating pt
+    is_int <- .spatraster_is_int(
+        raster_object = r,
+        sample_values = svals
+    )
+    .Object@is_int <- is_int
+
+    # extent
+    .Object@extent <- as.vector(terra::ext(r))
+    names(.Object@extent) <- c("xmin", "xmax", "ymin", "ymax")
+    .Object@overall_extent <- .Object@overall_extent %null%
+        as.vector(terra::ext(r))
+
+    # max window
+    .Object@max_window <- .Object@max_window %null% .Object@max_intensity
+    # .Object@max_window <- .Object@max_window %na%
+    #     .bitdepth(.Object@max_intensity, return_max = TRUE)
+
+    return(.Object)
+})
+
+## giottoAffineImage ####
+setMethod("initialize", signature("giottoAffineImage"), function(.Object, ...) {
+    .Object <- methods::callNextMethod()
+
+    # default name
+    if (is.null(objName(.Object))) {
+        objName(.Object) <- "test"
+    }
+
+    # append associated functions
+
+
+    r <- .Object@raster_object
+    if (!is.null(r)) {
+        # apply the image extent as anchor for affine object plotting
+        .Object@affine@anchor <- ext(r)
+        .Object@affine <- initialize(.Object@affine)
+
+        # compute & set extent slot as a numeric vector
+        d <- .bound_poly(r) %>%
+            affine(.Object@affine)
+        .Object@extent <- .ext_to_num_vec(ext(d))
+    }
+
+    .Object@funs$realize_magick <- function(filename = NULL, size = 5e5) {
+        mg <- .gaffine_realize_magick(.Object, size = size)
+        gimg <- .magick_preview(mg@mg_object, filename = filename) %>%
+            createGiottoLargeImage()
+        ext(gimg) <- ext(.Object)
+
+        # mask image
+        aff <- .Object@affine
+        m <- .bound_poly(ext(aff@anchor))
+        m <- affine(m, aff)
+        gimg@raster_object <- terra::mask(gimg@raster_object, mask = m)
+
+        return(gimg)
+        # TODO things to be implemented for this pipeline:
+        # col (the trip the magick-image flattened the image without applying col)
+        # max_intensity same as above
+        # the above options are also stripped when the fresh largeImage is created
+    }
+
+    return(.Object)
+})
+
+
+
+
+
+
+
+## * Initialize
+# setMethod('initialize', 'nnNetObj',
+#           function(.Object, ...) {
+#
+#             # expand args
+#             a = list(.Object = .Object, ...)
+#
+#             # evaluate data
+#             if('igraph' %in% names(a)) {
+#               igraph = a$igraph
+#               if(is.null(igraph)) igraph = NULL
+#               else {
+#                 # Convert igraph input to preferred format
+#                 igraph = .evaluate_nearest_networks(igraph)
+#               }
+#
+#               # return to arg list
+#               a$igraph = igraph
+#             }
+#
+#             .Object = do.call('methods'::'callNextMethod', a)
+#             .Object
+#           })
+
+
+
+
+
+## * Initialize
+# setMethod('initialize', 'spatLocsObj',
+#           function(.Object, ...) {
+#
+#             # expand args
+#             a = list(.Object = .Object, ...)
+#
+#             # evaluate data
+#             if('coordinates' %in% names(a)) {
+#               coordinates = a$coordinates
+#               if(is.null(coordinates)) {
+#                 coordinates = data.table::data.table(
+#                   sdimx = NA_real_,
+#                   sdimy = NA_real_,
+#                   cell_ID = NA_character_
+#                 )
+#               } else {
+#                 coordinates = .evaluate_spatial_locations(coordinates)
+#               }
+#
+#               # return to arg list
+#               a$coordinates = coordinates
+#             }
+#
+#             .Object = do.call('methods'::'callNextMethod', a)
+#             .Object
+#           })
+
+
+
+
+
+## * Initialize
+# setMethod('initialize', 'exprObj',
+#           function(.Object, ...) {
+#
+#             # expand args
+#             a = list(.Object = .Object, ...)
+#
+#             # evaluate data
+#             if('exprMat' %in% names(a)) {
+#               exprMat = a$exprMat
+#               if(is.null(exprMat)) exprMat = matrix()
+#               else {
+#                 # Convert matrix input to preferred format
+#                 exprMat = .evaluate_expr_matrix(exprMat)
+#               }
+#
+#               # return to arg list
+#               a$exprMat = exprMat
+#             }
+#
+#             .Object = do.call('methods'::'callNextMethod', a)
+#             .Object
+#           })
+
+
+
+
+
+# helpers ####
+
+.init_gobject <- function(.Object, ..., initialize = TRUE) {
+    if (!initialize || isFALSE(getOption("giotto.init", TRUE))) {
+        return(.Object)
+    }
     .Object <- updateGiottoObject(.Object)
 
+    vmsg(.is_debug = TRUE, .initial = "  ", "!!giotto.initialize run!!")
 
     # DT vars
     spat_unit <- feat_type <- NULL
@@ -65,7 +387,7 @@ setMethod("initialize", signature("giotto"), function(.Object, ...) {
 
     # detect ID slots
     avail_cid <- list_cell_id_names(.Object)
-    avail_fid <- list_cell_id_names(.Object)
+    avail_fid <- list_feat_id_names(.Object)
 
     # detect metadata slots
     avail_cm <- list_cell_metadata(.Object)
@@ -376,6 +698,14 @@ setMethod("initialize", signature("giotto"), function(.Object, ...) {
     }
 
 
+    # SLOT CHECKS ####
+
+    # option to skip checks
+    if (!getOption("giotto.check_valid", TRUE)) {
+        return(.Object)
+    }
+
+    vmsg(.is_debug = TRUE, .initial = "  ", "!!giotto validity run!!")
 
     ## Metadata ##
     ## ------------- ##
@@ -453,8 +783,6 @@ setMethod("initialize", signature("giotto"), function(.Object, ...) {
 
 
 
-
-
     ## validity check ##
     ## -------------- ##
     methods::validObject(.Object)
@@ -462,321 +790,7 @@ setMethod("initialize", signature("giotto"), function(.Object, ...) {
 
 
     .Object
-})
-
-
-
-
-
-
-
-
-
-
-# Virtual Classes ####
-
-
-
-
-
-
-## metaData ####
-setMethod(
-    "initialize", "metaData",
-    function(.Object, ...) {
-        .Object <- methods::callNextMethod()
-        # prepare DT for set by reference
-        if (!is.null(.Object@metaDT)) {
-            .Object@metaDT <- data.table::setalloccol(.Object@metaDT)
-        }
-        .Object
-    }
-)
-
-
-
-## enrData ####
-setMethod(
-    "initialize", "enrData",
-    function(.Object, ...) {
-        .Object <- methods::callNextMethod()
-        # prepare DT for set by reference
-        if (!is.null(.Object@enrichDT)) {
-            .Object@enrichDT <- data.table::setalloccol(.Object@enrichDT)
-        }
-        .Object
-    }
-)
-
-
-
-
-
-## spatNetData ####
-setMethod(
-    "initialize", "spatNetData",
-    function(.Object, ...) {
-        .Object <- methods::callNextMethod()
-        # prepare DT for set by reference
-        if (!is.null(.Object@networkDT)) {
-            .Object@networkDT <- data.table::setalloccol(.Object@networkDT)
-        }
-        if (!is.null(.Object@networkDT_before_filter)) {
-            .Object@networkDT_before_filter <- data.table::setalloccol(
-                .Object@networkDT_before_filter
-            )
-        }
-        .Object
-    }
-)
-
-
-
-
-
-## coordDataDT ####
-setMethod(
-    "initialize", "coordDataDT",
-    function(.Object, ...) {
-        .Object <- methods::callNextMethod()
-        # prepare DT for set by reference
-        if (!is.null(.Object@coordinates)) {
-            .Object@coordinates <- data.table::setalloccol(.Object@coordinates)
-        }
-        .Object
-    }
-)
-
-
-
-
-
-
-## spatGridData ####
-setMethod(
-    "initialize", "spatGridData",
-    function(.Object, ...) {
-        .Object <- methods::callNextMethod()
-        # prepare DT for set by reference
-        if (!is.null(.Object@gridDT)) {
-            .Object@gridDT <- data.table::setalloccol(.Object@gridDT)
-        }
-        .Object
-    }
-)
-
-
-## affine2d ####
-setMethod("initialize", "affine2d", function(.Object, ...) {
-    .Object <- methods::callNextMethod()
-    .Object@anchor <- ext(.Object@anchor) %>%
-        .ext_to_num_vec()
-    
-    res <- .decomp_affine(.Object@affine)
-    
-    .Object@affine <- res$affine
-    .Object@rotate <- res$rotate
-    .Object@shear <- res$shear
-    .Object@scale <- res$scale
-    .Object@translate <- res$translate
-
-    return(.Object)
-})
-
-## giottoLargeImage ####
-setMethod("initialize", signature("giottoLargeImage"), function(.Object, ...) {
-    .Object <- methods::callNextMethod()
-    
-    # defaults
-    .Object@OS_platform <- .Object@OS_platform %null% .Platform[["OS.type"]]
-    objName(.Object) <- objName(.Object) %null% "image"
-    
-    r <- .Object@raster_object
-    if (is.null(r)) return(.Object) # return early if NULL
-    
-    # scale factor and res
-    .Object@resolution <- terra::res(r)
-    names(.Object@resolution) <- c("x", "y")
-    .Object@scale_factor <- 1 / .Object@resolution
-    
-    # sample for image characteristics
-    svals <- .spatraster_sample_values(r, size = 5000, verbose = FALSE)
-    
-    if (nrow(svals) != 0) {
-        intensity_range <- .spatraster_intensity_range(
-            raster_object = r,
-            sample_values = svals
-        )
-    }
-    .Object@min_intensity <- intensity_range[["min"]]
-    .Object@max_intensity <- intensity_range[["max"]]
-    
-    # find out if image is int or floating pt
-    is_int <- .spatraster_is_int(
-        raster_object = r,
-        sample_values = svals
-    )
-    .Object@is_int <- is_int
-    
-    # extent
-    .Object@extent <- as.vector(terra::ext(r))
-    names(.Object@extent) <- c("xmin", "xmax", "ymin", "ymax")
-    .Object@overall_extent <- .Object@overall_extent %null%
-        as.vector(terra::ext(r))
-    
-    # max window
-    .Object@max_window <- .Object@max_window %null% .Object@max_intensity
-    # .Object@max_window <- .Object@max_window %na% 
-    #     .bitdepth(.Object@max_intensity, return_max = TRUE)
-    
-    return(.Object)
-})
-
-## giottoAffineImage ####
-setMethod("initialize", signature("giottoAffineImage"), function(.Object, ...) {
-    .Object <- methods::callNextMethod()
-    
-    # default name
-    if (is.null(objName(.Object))) {
-        objName(.Object) <- "test"
-    }
-    
-    # append associated functions
-    
-    
-    r <- .Object@raster_object
-    if (!is.null(r)) {
-        # apply the image extent as anchor for affine object plotting
-        .Object@affine@anchor <- ext(r)
-        .Object@affine <- initialize(.Object@affine)
-        
-        # compute & set extent slot as a numeric vector
-        d <- .bound_poly(r) %>%
-            affine(.Object@affine)
-        .Object@extent <- .ext_to_num_vec(ext(d))
-    }
-    
-    .Object@funs$realize_magick <- function(tempname = "preview", size = 5e5) {
-        mg <- .gaffine_realize_magick(.Object, size = size)
-        gimg <- .magick_preview(mg@mg_object, tempname = tempname) %>%
-            createGiottoLargeImage()
-        ext(gimg) <- ext(.Object)
-        
-        # mask image
-        aff <- .Object@affine
-        m <- .bound_poly(ext(aff@anchor))
-        m <- affine(m, aff)
-        gimg@raster_object <- terra::mask(gimg@raster_object, mask = m)
-        
-        return(gimg)
-        # TODO things to be implemented for this pipeline:
-        # col (the trip the magick-image flattened the image without applying col)
-        # max_intensity same as above
-        # the above options are also stripped when the fresh largeImage is created
-    }
-    
-    return(.Object)
-})
-
-
-
-
-
-
-
-
-
-## * Initialize
-# setMethod('initialize', 'nnNetObj',
-#           function(.Object, ...) {
-#
-#             # expand args
-#             a = list(.Object = .Object, ...)
-#
-#             # evaluate data
-#             if('igraph' %in% names(a)) {
-#               igraph = a$igraph
-#               if(is.null(igraph)) igraph = NULL
-#               else {
-#                 # Convert igraph input to preferred format
-#                 igraph = .evaluate_nearest_networks(igraph)
-#               }
-#
-#               # return to arg list
-#               a$igraph = igraph
-#             }
-#
-#             .Object = do.call('methods'::'callNextMethod', a)
-#             .Object
-#           })
-
-
-
-
-
-## * Initialize
-# setMethod('initialize', 'spatLocsObj',
-#           function(.Object, ...) {
-#
-#             # expand args
-#             a = list(.Object = .Object, ...)
-#
-#             # evaluate data
-#             if('coordinates' %in% names(a)) {
-#               coordinates = a$coordinates
-#               if(is.null(coordinates)) {
-#                 coordinates = data.table::data.table(
-#                   sdimx = NA_real_,
-#                   sdimy = NA_real_,
-#                   cell_ID = NA_character_
-#                 )
-#               } else {
-#                 coordinates = .evaluate_spatial_locations(coordinates)
-#               }
-#
-#               # return to arg list
-#               a$coordinates = coordinates
-#             }
-#
-#             .Object = do.call('methods'::'callNextMethod', a)
-#             .Object
-#           })
-
-
-
-
-
-## * Initialize
-# setMethod('initialize', 'exprObj',
-#           function(.Object, ...) {
-#
-#             # expand args
-#             a = list(.Object = .Object, ...)
-#
-#             # evaluate data
-#             if('exprMat' %in% names(a)) {
-#               exprMat = a$exprMat
-#               if(is.null(exprMat)) exprMat = matrix()
-#               else {
-#                 # Convert matrix input to preferred format
-#                 exprMat = .evaluate_expr_matrix(exprMat)
-#               }
-#
-#               # return to arg list
-#               a$exprMat = exprMat
-#             }
-#
-#             .Object = do.call('methods'::'callNextMethod', a)
-#             .Object
-#           })
-
-
-
-
-
-# helpers ####
-
-
+}
 
 
 # initialize IDs ####

@@ -12,6 +12,7 @@
   keep.rownames = FALSE,
   geom = NULL,
   include_values = TRUE,
+  geomtype,
   ...
 )
 
@@ -30,6 +31,11 @@ Well-Known-Text or hexadecimal notation.}
 
 \item{include_values}{whether to include attributes information when geom
 is 'XY'}
+
+\item{geomtype}{character (optional). One of "points" or "polygons".
+Fallback geomtype used when it is not possible for \{terra\} to determine
+the type of geometry an object is.
+(commonly seen when nrow of the object = 0)}
 
 \item{\dots}{additional arguments to pass}
 }

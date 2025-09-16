@@ -35,8 +35,6 @@
 
 \S4method{flip}{SpatExtent}(x, direction = "vertical", x0 = 0, y0 = 0)
 
-\S4method{flip}{giottoLargeImage}(x, direction = "vertical", x0 = 0, y0 = 0)
-
 \S4method{flip}{giottoAffineImage}(x, direction = "vertical", x0 = 0, y0 = 0)
 
 \S4method{flip}{affine2d}(x, direction = "vertical", x0 = 0, y0 = 0)
